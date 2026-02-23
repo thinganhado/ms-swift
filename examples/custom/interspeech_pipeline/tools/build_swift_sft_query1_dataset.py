@@ -3,12 +3,15 @@ import argparse
 import csv
 import json
 import random
+from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 DEFAULT_PROMPT = "Select the top 3 regions that most likely contain spoof artifacts."
 DEFAULT_INPUT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
+DEFAULT_IMAGE_DIR = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid"
+DEFAULT_IMAGE_SUFFIX = "_grid_img_edge_number_axes.png"
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,7 +36,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Drop unmatched samples when --split-by-path is set.",
     )
-    parser.add_argument("--image-col", default="img_path", help="CSV column containing image path.")
+    parser.add_argument(
+        "--image-col",
+        default="img_path",
+        help="CSV column containing full image path. If missing/empty, sample_id+region_id mode is used.",
+    )
+    parser.add_argument("--sample-id-col", default="sample_id", help="CSV column containing sample id.")
+    parser.add_argument("--region-id-col", default="region_id", help="CSV column containing region id.")
+    parser.add_argument("--image-dir", default=DEFAULT_IMAGE_DIR, help="Image directory for sample_id mode.")
+    parser.add_argument(
+        "--image-suffix",
+        default=DEFAULT_IMAGE_SUFFIX,
+        help="Image filename suffix for sample_id mode.",
+    )
     parser.add_argument(
         "--regions-col",
         default="",
@@ -86,6 +101,79 @@ def _extract_target(row: Dict[str, str], regions_col: str) -> Optional[str]:
     return None
 
 
+def _region_sort_key(x: str) -> Tuple[int, object]:
+    if x.isdigit():
+        return (0, int(x))
+    return (1, x)
+
+
+def _build_records_from_img_rows(
+    reader: csv.DictReader,
+    image_col: str,
+    regions_col: str,
+    user_prompt: str,
+    json_array_target: bool,
+) -> Tuple[List[Dict], List[Tuple[str, Dict]], int]:
+    records: List[Dict] = []
+    path_aware_rows: List[Tuple[str, Dict]] = []
+    skipped = 0
+
+    for idx, row in enumerate(reader):
+        image_path = str(row.get(image_col, "")).strip()
+        target_raw = _extract_target(row, regions_col)
+        if not image_path or not target_raw:
+            skipped += 1
+            continue
+        target = _to_json_array_string(target_raw) if json_array_target else target_raw
+        rec = _build_record(idx=idx, image_path=image_path, target=target, user_prompt=user_prompt)
+        records.append(rec)
+        path_aware_rows.append((image_path, rec))
+    return records, path_aware_rows, skipped
+
+
+def _build_records_from_sample_rows(
+    reader: csv.DictReader,
+    sample_id_col: str,
+    region_id_col: str,
+    image_dir: str,
+    image_suffix: str,
+    user_prompt: str,
+    json_array_target: bool,
+) -> Tuple[List[Dict], List[Tuple[str, Dict]], int]:
+    sample_to_regions: "OrderedDict[str, List[str]]" = OrderedDict()
+    skipped = 0
+
+    for row in reader:
+        sample_id = str(row.get(sample_id_col, "")).strip()
+        region_id = str(row.get(region_id_col, "")).strip()
+        if not sample_id or not region_id:
+            skipped += 1
+            continue
+        if sample_id not in sample_to_regions:
+            sample_to_regions[sample_id] = []
+        if region_id not in sample_to_regions[sample_id]:
+            sample_to_regions[sample_id].append(region_id)
+
+    records: List[Dict] = []
+    path_aware_rows: List[Tuple[str, Dict]] = []
+    idx = 0
+    for sample_id, region_list in sample_to_regions.items():
+        if len(region_list) < 3:
+            skipped += 1
+            continue
+        # Keep first 3 in file order; input CSV is expected to be top-k ordered.
+        top3 = region_list[:3]
+        target_raw = ",".join(top3)
+        target = _to_json_array_string(target_raw) if json_array_target else target_raw
+        image_path = str(Path(image_dir) / f"{sample_id}{image_suffix}")
+        rec = _build_record(idx=idx, image_path=image_path, target=target, user_prompt=user_prompt)
+        records.append(rec)
+        path_aware_rows.append((image_path, rec))
+        idx += 1
+
+    return records, path_aware_rows, skipped
+
+
 def _build_record(idx: int, image_path: str, target: str, user_prompt: str) -> Dict:
     return {
         "sample_id": f"stage1_q1_{idx:06d}",
@@ -111,22 +199,33 @@ def main() -> None:
     args = parse_args()
     csv_path = Path(args.input_csv).expanduser()
 
-    records: List[Dict] = []
-    path_aware_rows: List[tuple[str, Dict]] = []
-    skipped = 0
-
     with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        for idx, row in enumerate(reader):
-            image_path = str(row.get(args.image_col, "")).strip()
-            target_raw = _extract_target(row, args.regions_col)
-            if not image_path or not target_raw:
-                skipped += 1
-                continue
-            target = _to_json_array_string(target_raw) if args.json_array_target else target_raw
-            rec = _build_record(idx=idx, image_path=image_path, target=target, user_prompt=args.user_prompt)
-            records.append(rec)
-            path_aware_rows.append((image_path, rec))
+        fieldnames = set(reader.fieldnames or [])
+        use_img_mode = bool(args.image_col) and args.image_col in fieldnames
+        if use_img_mode:
+            records, path_aware_rows, skipped = _build_records_from_img_rows(
+                reader=reader,
+                image_col=args.image_col,
+                regions_col=args.regions_col,
+                user_prompt=args.user_prompt,
+                json_array_target=args.json_array_target,
+            )
+            print(f"mode: img_path (image_col='{args.image_col}')")
+        else:
+            records, path_aware_rows, skipped = _build_records_from_sample_rows(
+                reader=reader,
+                sample_id_col=args.sample_id_col,
+                region_id_col=args.region_id_col,
+                image_dir=args.image_dir,
+                image_suffix=args.image_suffix,
+                user_prompt=args.user_prompt,
+                json_array_target=args.json_array_target,
+            )
+            print(
+                "mode: sample_id+region_id "
+                f"(sample_id_col='{args.sample_id_col}', region_id_col='{args.region_id_col}')"
+            )
 
     split_mode = args.train_json is not None and args.val_json is not None
     if split_mode:

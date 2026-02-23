@@ -6,6 +6,10 @@ SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/da
 USER_PROMPT="${USER_PROMPT:-Select the top 3 regions that most likely contain spoof artifacts.}"
 REGIONS_COL="${REGIONS_COL:-}"
 IMAGE_COL="${IMAGE_COL:-img_path}"
+SAMPLE_ID_COL="${SAMPLE_ID_COL:-sample_id}"
+REGION_ID_COL="${REGION_ID_COL:-region_id}"
+IMAGE_DIR="${IMAGE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid}"
+IMAGE_SUFFIX="${IMAGE_SUFFIX:-_grid_img_edge_number_axes.png}"
 
 EXTRA_ARGS=()
 if [ -n "${REGIONS_COL}" ]; then
@@ -15,6 +19,10 @@ fi
 python examples/custom/interspeech_pipeline/tools/build_swift_sft_query1_dataset.py \
   --input-csv "${CSV_IN}" \
   --image-col "${IMAGE_COL}" \
+  --sample-id-col "${SAMPLE_ID_COL}" \
+  --region-id-col "${REGION_ID_COL}" \
+  --image-dir "${IMAGE_DIR}" \
+  --image-suffix "${IMAGE_SUFFIX}" \
   --user-prompt "${USER_PROMPT}" \
   --output-json "${SFT_JSON_SWIFT}" \
   "${EXTRA_ARGS[@]}"
