@@ -30,12 +30,13 @@ OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/i
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
+TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 
 mkdir -p /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs
-mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${CACHE_ROOT}/tmp"
+mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${TMPDIR_BASE}"
 
 # Avoid home-dir quota issues (e.g., /home/<user>/.triton).
 export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
@@ -47,7 +48,7 @@ export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
 export DATASETS_CACHE="${CACHE_ROOT}/datasets"
 export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
 export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
-export TMPDIR="${CACHE_ROOT}/tmp"
+export TMPDIR="${TMPDIR_BASE}"
 
 if [ ! -f "${SFT_JSON_SWIFT}" ]; then
   echo "ERROR: dataset not found: ${SFT_JSON_SWIFT}"
@@ -92,7 +93,7 @@ swift sft \
   --greater_is_better false \
   --save_total_limit 5 \
   --dataloader_num_workers 1 \
-  --dataset_num_proc 4 \
+  --dataset_num_proc 1 \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard
 
