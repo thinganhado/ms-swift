@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:2
-#SBATCH --time=30:00:00
+#SBATCH --time=31:00:00
 #SBATCH --output=/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs/%x_%j.out
 #SBATCH --error=/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs/%x_%j.err
 
