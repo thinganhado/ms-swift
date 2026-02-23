@@ -246,7 +246,8 @@ def _build_record(idx: int, image_path: str, target: str, user_prompt: str) -> D
                     {"type": "text", "text": user_prompt},
                 ],
             },
-            {"role": "assistant", "content": target},
+            # Keep content schema consistent for Arrow conversion in HF datasets.
+            {"role": "assistant", "content": [{"type": "text", "text": target}]},
         ],
     }
 
