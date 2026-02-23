@@ -8,6 +8,10 @@ REGIONS_COL="${REGIONS_COL:-}"
 IMAGE_COL="${IMAGE_COL:-img_path}"
 SAMPLE_ID_COL="${SAMPLE_ID_COL:-sample_id}"
 REGION_ID_COL="${REGION_ID_COL:-region_id}"
+ORDER_CSV="${ORDER_CSV:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv}"
+ORDER_SAMPLE_ID_COL="${ORDER_SAMPLE_ID_COL:-image}"
+ORDER_REGION_ID_COL="${ORDER_REGION_ID_COL:-region_id}"
+ORDER_SCORE_COL="${ORDER_SCORE_COL:-region_pixels}"
 IMAGE_DIR="${IMAGE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid}"
 IMAGE_SUFFIX="${IMAGE_SUFFIX:-_grid_img_edge_number_axes.png}"
 
@@ -21,6 +25,10 @@ python examples/custom/interspeech_pipeline/tools/build_swift_sft_query1_dataset
   --image-col "${IMAGE_COL}" \
   --sample-id-col "${SAMPLE_ID_COL}" \
   --region-id-col "${REGION_ID_COL}" \
+  --order-csv "${ORDER_CSV}" \
+  --order-sample-id-col "${ORDER_SAMPLE_ID_COL}" \
+  --order-region-id-col "${ORDER_REGION_ID_COL}" \
+  --order-score-col "${ORDER_SCORE_COL}" \
   --image-dir "${IMAGE_DIR}" \
   --image-suffix "${IMAGE_SUFFIX}" \
   --user-prompt "${USER_PROMPT}" \

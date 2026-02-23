@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 DEFAULT_PROMPT = "Select the top 3 regions that most likely contain spoof artifacts."
 DEFAULT_INPUT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
+DEFAULT_ORDER_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv"
 DEFAULT_IMAGE_DIR = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid"
 DEFAULT_IMAGE_SUFFIX = "_grid_img_edge_number_axes.png"
 
@@ -43,6 +44,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sample-id-col", default="sample_id", help="CSV column containing sample id.")
     parser.add_argument("--region-id-col", default="region_id", help="CSV column containing region id.")
+    parser.add_argument(
+        "--order-csv",
+        default=DEFAULT_ORDER_CSV,
+        help=f"Optional order CSV used for ranking. Default: {DEFAULT_ORDER_CSV}",
+    )
+    parser.add_argument(
+        "--order-sample-id-col",
+        default="image",
+        help="Sample-id column in --order-csv.",
+    )
+    parser.add_argument(
+        "--order-region-id-col",
+        default="region_id",
+        help="Region-id column in --order-csv.",
+    )
+    parser.add_argument(
+        "--order-score-col",
+        default="region_pixels",
+        help="Score column in --order-csv. Higher means earlier rank.",
+    )
     parser.add_argument("--image-dir", default=DEFAULT_IMAGE_DIR, help="Image directory for sample_id mode.")
     parser.add_argument(
         "--image-suffix",
@@ -135,6 +156,7 @@ def _build_records_from_sample_rows(
     reader: csv.DictReader,
     sample_id_col: str,
     region_id_col: str,
+    order_scores: Dict[Tuple[str, str], float],
     image_dir: str,
     image_suffix: str,
     user_prompt: str,
@@ -161,8 +183,11 @@ def _build_records_from_sample_rows(
         if len(region_list) < 3:
             skipped += 1
             continue
-        # Keep first 3 in file order; input CSV is expected to be top-k ordered.
-        top3 = region_list[:3]
+        ranked_regions = sorted(
+            region_list,
+            key=lambda rid: (-order_scores.get((sample_id, rid), float("-inf")), _region_sort_key(rid)),
+        )
+        top3 = ranked_regions[:3]
         target_raw = ",".join(top3)
         target = _to_json_array_string(target_raw) if json_array_target else target_raw
         image_path = str(Path(image_dir) / f"{sample_id}{image_suffix}")
@@ -172,6 +197,42 @@ def _build_records_from_sample_rows(
         idx += 1
 
     return records, path_aware_rows, skipped
+
+
+def _load_order_scores(
+    order_csv: str,
+    sample_id_col: str,
+    region_id_col: str,
+    score_col: str,
+) -> Dict[Tuple[str, str], float]:
+    if not order_csv:
+        return {}
+
+    order_path = Path(order_csv).expanduser()
+    if not order_path.exists():
+        print(f"warning: order-csv not found, fallback to id tie-break only: {order_path}")
+        return {}
+
+    out: Dict[Tuple[str, str], float] = {}
+    with order_path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            sample_id = str(row.get(sample_id_col, "")).strip()
+            region_id = str(row.get(region_id_col, "")).strip()
+            score_raw = str(row.get(score_col, "")).strip()
+            if not sample_id or not region_id or not score_raw:
+                continue
+            try:
+                score = float(score_raw)
+            except ValueError:
+                continue
+            key = (sample_id, region_id)
+            old = out.get(key, float("-inf"))
+            if score > old:
+                out[key] = score
+
+    print(f"loaded order scores: {len(out)} pairs from {order_path}")
+    return out
 
 
 def _build_record(idx: int, image_path: str, target: str, user_prompt: str) -> Dict:
@@ -198,6 +259,12 @@ def _write_json(path: Path, data: List[Dict]) -> None:
 def main() -> None:
     args = parse_args()
     csv_path = Path(args.input_csv).expanduser()
+    order_scores = _load_order_scores(
+        order_csv=args.order_csv,
+        sample_id_col=args.order_sample_id_col,
+        region_id_col=args.order_region_id_col,
+        score_col=args.order_score_col,
+    )
 
     with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -217,6 +284,7 @@ def main() -> None:
                 reader=reader,
                 sample_id_col=args.sample_id_col,
                 region_id_col=args.region_id_col,
+                order_scores=order_scores,
                 image_dir=args.image_dir,
                 image_suffix=args.image_suffix,
                 user_prompt=args.user_prompt,
