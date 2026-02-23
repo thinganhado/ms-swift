@@ -27,7 +27,7 @@ MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_train_swift.json}"
 SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_val_swift.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
-SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/baseline_prompts/baseline_system.txt}"
+SYSTEM_PROMPT="As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs."
 SAVE_STEPS="${SAVE_STEPS:-200}"
 MAX_LENGTH="${MAX_LENGTH:-512}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
@@ -85,7 +85,7 @@ swift sft \
   --model "${MODEL_ID}" \
   --dataset "${SFT_JSON_SWIFT}" \
   --val_dataset "${SFT_VAL_JSON_SWIFT}" \
-  --system "${SYSTEM_PROMPT_FILE}" \
+  --system "${SYSTEM_PROMPT}" \
   --tuner_type lora \
   --torch_dtype float16 \
   --lora_rank 8 \

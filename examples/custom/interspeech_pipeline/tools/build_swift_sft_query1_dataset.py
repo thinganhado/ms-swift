@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-DEFAULT_PROMPT = "Select the top 3 regions that most likely contain spoof artifacts."
+DEFAULT_PROMPT = "Select the top 3 regions that most likely contain spoof artifacts, ordered from most to least prominent spoof artifact evidence."
 DEFAULT_INPUT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
 DEFAULT_ORDER_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv"
 DEFAULT_IMAGE_DIR = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid"
