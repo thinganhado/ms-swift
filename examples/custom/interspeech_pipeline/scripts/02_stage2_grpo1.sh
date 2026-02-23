@@ -11,6 +11,10 @@ SFT_TOP3="${SFT_TOP3:-13, 1, 2}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+USE_VLLM="${USE_VLLM:-true}"
+VLLM_MODE="${VLLM_MODE:-colocate}"
+VLLM_TP="${VLLM_TP:-1}"
+SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
 
 # ===== Build GRPO1 dataset =====
 python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt1_dataset.py \
@@ -29,6 +33,10 @@ swift rlhf \
   --system "${SYSTEM_PROMPT_FILE}" \
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py \
   --reward_funcs external_interspeech_p1 \
+  --use_vllm "${USE_VLLM}" \
+  --vllm_mode "${VLLM_MODE}" \
+  --vllm_tensor_parallel_size "${VLLM_TP}" \
+  --sleep_level "${SLEEP_LEVEL}" \
   --beta 0.01 \
   --num_generations 8 \
   --temperature 1.1 \
