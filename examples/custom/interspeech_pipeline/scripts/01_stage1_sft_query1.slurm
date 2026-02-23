@@ -27,10 +27,12 @@ MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_train_swift.json}"
 SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_val_swift.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
-SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
+SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/baseline_prompts/baseline_system.txt}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
+AUTO_RESUME="${AUTO_RESUME:-1}"
+RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
@@ -58,6 +60,22 @@ fi
 if [ ! -f "${SFT_VAL_JSON_SWIFT}" ]; then
   echo "ERROR: validation dataset not found: ${SFT_VAL_JSON_SWIFT}"
   exit 1
+fi
+
+RESUME_ARGS=()
+if [ -n "${RESUME_FROM_CHECKPOINT}" ]; then
+  RESUME_ARGS=(--resume_from_checkpoint "${RESUME_FROM_CHECKPOINT}")
+  echo "Resuming from explicit checkpoint: ${RESUME_FROM_CHECKPOINT}"
+elif [ "${AUTO_RESUME}" = "1" ]; then
+  LATEST_CKPT="$(ls -d "${OUTPUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)"
+  if [ -n "${LATEST_CKPT}" ]; then
+    RESUME_ARGS=(--resume_from_checkpoint "${LATEST_CKPT}")
+    echo "Auto-resume from latest checkpoint: ${LATEST_CKPT}"
+  else
+    echo "No existing checkpoint found under ${OUTPUT_DIR}; starting fresh."
+  fi
+else
+  echo "AUTO_RESUME=0; starting fresh."
 fi
 
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
@@ -95,7 +113,8 @@ swift sft \
   --dataloader_num_workers 1 \
   --dataset_num_proc 1 \
   --output_dir "${OUTPUT_DIR}" \
-  --report_to tensorboard
+  --report_to tensorboard \
+  "${RESUME_ARGS[@]}"
 
 python - <<'PY'
 import json
