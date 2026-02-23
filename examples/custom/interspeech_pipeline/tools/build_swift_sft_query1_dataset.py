@@ -8,13 +8,18 @@ from typing import Dict, List, Optional
 
 
 DEFAULT_PROMPT = "Select the top 3 regions that most likely contain spoof artifacts."
+DEFAULT_INPUT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build MS-Swift SFT dataset for query1 directly from a CSV."
     )
-    parser.add_argument("--input-csv", required=True, help="Input CSV path.")
+    parser.add_argument(
+        "--input-csv",
+        default=DEFAULT_INPUT_CSV,
+        help=f"Input CSV path. Default: {DEFAULT_INPUT_CSV}",
+    )
     parser.add_argument("--output-json", default=None, help="Output JSON path (single-file mode).")
     parser.add_argument("--train-json", default=None, help="Train JSON output path (split mode).")
     parser.add_argument("--val-json", default=None, help="Validation JSON output path (split mode).")

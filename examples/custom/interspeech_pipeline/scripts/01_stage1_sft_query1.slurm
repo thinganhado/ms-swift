@@ -24,21 +24,20 @@ conda activate deepfake
 cd /scratch3/che489/Ha/interspeech/training/ms-swift
 
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen3-VL-8B-Instruct/}"
-SFT_CSV_IN="${SFT_CSV_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv}"
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_train_swift.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
-USER_PROMPT="${USER_PROMPT:-Select the top 3 regions that most likely contain spoof artifacts.}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 
 mkdir -p /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs
 
-python examples/custom/interspeech_pipeline/tools/build_swift_sft_query1_dataset.py \
-  --input-csv "${SFT_CSV_IN}" \
-  --user-prompt "${USER_PROMPT}" \
-  --output-json "${SFT_JSON_SWIFT}"
+if [ ! -f "${SFT_JSON_SWIFT}" ]; then
+  echo "ERROR: dataset not found: ${SFT_JSON_SWIFT}"
+  echo "Run: bash examples/custom/interspeech_pipeline/scripts/00_build_sft_query1_dataset.sh"
+  exit 1
+fi
 
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
