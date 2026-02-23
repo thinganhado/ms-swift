@@ -31,13 +31,64 @@ OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/i
 SYSTEM_PROMPT="As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs."
 SAVE_STEPS="${SAVE_STEPS:-200}"
 MAX_LENGTH="${MAX_LENGTH:-768}"
+NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-3}"
+PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-8}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+LEARNING_RATE="${LEARNING_RATE:-1e-4}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-0.1}"
+WARMUP_RATIO="${WARMUP_RATIO:-0.03}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
+DATASET_NUM_PROC="${DATASET_NUM_PROC:-1}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
+TRAINING_CONFIG_JSON="${TRAINING_CONFIG_JSON:-}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+
+if [ -n "${TRAINING_CONFIG_JSON}" ]; then
+  if [ ! -f "${TRAINING_CONFIG_JSON}" ]; then
+    echo "ERROR: TRAINING_CONFIG_JSON not found: ${TRAINING_CONFIG_JSON}"
+    exit 1
+  fi
+  eval "$(
+    python - "${TRAINING_CONFIG_JSON}" <<'PY'
+import json
+import pathlib
+import shlex
+import sys
+
+p = pathlib.Path(sys.argv[1]).expanduser().resolve()
+cfg = json.loads(p.read_text(encoding="utf-8"))
+if not isinstance(cfg, dict):
+    raise SystemExit("TRAINING_CONFIG_JSON must be a JSON object.")
+allowed = [
+    "MODEL_ID",
+    "SFT_JSON_SWIFT",
+    "SFT_VAL_JSON_SWIFT",
+    "EVAL_MAX_SAMPLES",
+    "OUTPUT_DIR",
+    "SAVE_STEPS",
+    "MAX_LENGTH",
+    "NUM_TRAIN_EPOCHS",
+    "PER_DEVICE_TRAIN_BATCH_SIZE",
+    "GRADIENT_ACCUMULATION_STEPS",
+    "LEARNING_RATE",
+    "WEIGHT_DECAY",
+    "WARMUP_RATIO",
+    "DATALOADER_NUM_WORKERS",
+    "DATASET_NUM_PROC",
+    "AUTO_RESUME",
+]
+for k in allowed:
+    if k in cfg:
+        print(f'export {k}={shlex.quote(str(cfg[k]))}')
+PY
+  )"
+  echo "Loaded training config: ${TRAINING_CONFIG_JSON}"
+fi
 
 mkdir -p /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs
 mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${TMPDIR_BASE}"
@@ -96,13 +147,13 @@ swift sft \
   --freeze_llm true \
   --freeze_vit false \
   --freeze_aligner false \
-  --num_train_epochs 3 \
-  --per_device_train_batch_size 8 \
-  --gradient_accumulation_steps 1 \
+  --num_train_epochs "${NUM_TRAIN_EPOCHS}" \
+  --per_device_train_batch_size "${PER_DEVICE_TRAIN_BATCH_SIZE}" \
+  --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS}" \
   --max_length "${MAX_LENGTH}" \
-  --learning_rate 1e-4 \
-  --weight_decay 0.1 \
-  --warmup_ratio 0.03 \
+  --learning_rate "${LEARNING_RATE}" \
+  --weight_decay "${WEIGHT_DECAY}" \
+  --warmup_ratio "${WARMUP_RATIO}" \
   --lr_scheduler_type cosine \
   --eval_strategy steps \
   --eval_steps "${SAVE_STEPS}" \
@@ -113,8 +164,8 @@ swift sft \
   --metric_for_best_model loss \
   --greater_is_better false \
   --save_total_limit 5 \
-  --dataloader_num_workers 1 \
-  --dataset_num_proc 1 \
+  --dataloader_num_workers "${DATALOADER_NUM_WORKERS}" \
+  --dataset_num_proc "${DATASET_NUM_PROC}" \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard \
   "${RESUME_ARGS[@]}"
