@@ -29,6 +29,7 @@ SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/baseline_prompts/baseline_system.txt}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
+MAX_LENGTH="${MAX_LENGTH:-512}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
@@ -97,6 +98,7 @@ swift sft \
   --num_train_epochs 3 \
   --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
+  --max_length "${MAX_LENGTH}" \
   --learning_rate 1e-4 \
   --weight_decay 0.1 \
   --warmup_ratio 0.03 \
