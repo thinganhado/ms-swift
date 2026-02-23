@@ -24,8 +24,8 @@ conda activate deepfake
 cd /scratch3/che489/Ha/interspeech/training/ms-swift
 
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen3-VL-8B-Instruct/}"
-SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_train_swift.json}"
-SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/stage1_query1_val_swift.json}"
+SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_train_swift.json}"
+SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json}"
 EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-30}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
 SYSTEM_PROMPT="As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs."
