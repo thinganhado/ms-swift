@@ -31,6 +31,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/i
 SYSTEM_PROMPT="As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs."
 SAVE_STEPS="${SAVE_STEPS:-200}"
 MAX_LENGTH="${MAX_LENGTH:-768}"
+DISABLE_EVAL="${DISABLE_EVAL:-0}"
 NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-3}"
 PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-8}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
@@ -73,6 +74,7 @@ allowed = [
     "SAVE_STEPS",
     "MAX_LENGTH",
     "NUM_TRAIN_EPOCHS",
+    "DISABLE_EVAL",
     "PER_DEVICE_TRAIN_BATCH_SIZE",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -131,12 +133,25 @@ else
   echo "AUTO_RESUME=0; starting fresh."
 fi
 
+VAL_DATASET_ARGS=(--val_dataset "${SFT_VAL_JSON_SWIFT}#${EVAL_MAX_SAMPLES}")
+EVAL_ARGS=(
+  --eval_strategy steps
+  --eval_steps "${SAVE_STEPS}"
+  --metric_for_best_model loss
+  --greater_is_better false
+)
+if [ "${DISABLE_EVAL}" = "1" ]; then
+  VAL_DATASET_ARGS=()
+  EVAL_ARGS=(--eval_strategy no)
+  echo "Evaluation disabled (DISABLE_EVAL=1)."
+fi
+
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 swift sft \
   --model "${MODEL_ID}" \
   --dataset "${SFT_JSON_SWIFT}" \
-  --val_dataset "${SFT_VAL_JSON_SWIFT}#${EVAL_MAX_SAMPLES}" \
+  "${VAL_DATASET_ARGS[@]}" \
   --system "${SYSTEM_PROMPT}" \
   --tuner_type lora \
   --torch_dtype float16 \
@@ -155,14 +170,11 @@ swift sft \
   --weight_decay "${WEIGHT_DECAY}" \
   --warmup_ratio "${WARMUP_RATIO}" \
   --lr_scheduler_type cosine \
-  --eval_strategy steps \
-  --eval_steps "${SAVE_STEPS}" \
+  "${EVAL_ARGS[@]}" \
   --max_pixels 524288 \
   --deepspeed zero2 \
   --logging_steps 10 \
   --save_steps "${SAVE_STEPS}" \
-  --metric_for_best_model loss \
-  --greater_is_better false \
   --save_total_limit 5 \
   --dataloader_num_workers "${DATALOADER_NUM_WORKERS}" \
   --dataset_num_proc "${DATASET_NUM_PROC}" \

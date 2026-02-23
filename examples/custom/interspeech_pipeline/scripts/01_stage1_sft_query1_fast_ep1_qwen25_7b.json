@@ -2,6 +2,7 @@
   "MODEL_ID": "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen2.5-VL-7B-Instruct/",
   "OUTPUT_DIR": "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final__baseline__lightweight__VLM/",
   "NUM_TRAIN_EPOCHS": 1,
+  "DISABLE_EVAL": 1,
   "EVAL_MAX_SAMPLES": 30,
   "SAVE_STEPS": 1000,
   "MAX_LENGTH": 768,
