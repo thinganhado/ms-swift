@@ -35,7 +35,7 @@ NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 
 mkdir -p /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs
-mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache"
+mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${CACHE_ROOT}/tmp"
 
 # Avoid home-dir quota issues (e.g., /home/<user>/.triton).
 export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
@@ -43,7 +43,11 @@ export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
 export HF_HOME="${CACHE_ROOT}/hf"
 export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
 export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
 export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
+export TMPDIR="${CACHE_ROOT}/tmp"
 
 if [ ! -f "${SFT_JSON_SWIFT}" ]; then
   echo "ERROR: dataset not found: ${SFT_JSON_SWIFT}"
