@@ -3,11 +3,9 @@ set -euo pipefail
 
 # ===== User-settable =====
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/stage1_mt_lora_Qwen3-VL-8B-Instruct_merged/}"
-GRPO1_JSON_IN="${GRPO1_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/stage1_train.json}"
 GRPO1_JSON_SWIFT="${GRPO1_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/stage1_train_swift_grpo1.json}"
-OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-1-ms-swift/lr1e-5_r8_a32_lora}"
+OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
-SFT_TOP3="${SFT_TOP3:-13, 1, 2}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
@@ -15,15 +13,23 @@ USE_VLLM="${USE_VLLM:-true}"
 VLLM_MODE="${VLLM_MODE:-colocate}"
 VLLM_TP="${VLLM_TP:-1}"
 SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
+DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
+LOGGING_STEPS="${LOGGING_STEPS:-100}"
+SAVE_STEPS="${SAVE_STEPS:-200}"
 
-# ===== Build GRPO1 dataset =====
-python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt1_dataset.py \
-  --input-json "${GRPO1_JSON_IN}" \
-  --output-json "${GRPO1_JSON_SWIFT}" \
-  --default-sft-top3 "${SFT_TOP3}"
+# Optional positional override: first arg as MODEL_ID
+if [[ $# -ge 1 && -n "${1:-}" ]]; then
+  MODEL_ID="$1"
+fi
+
+if [[ ! -f "${GRPO1_JSON_SWIFT}" ]]; then
+  echo "ERROR: GRPO1 dataset not found: ${GRPO1_JSON_SWIFT}"
+  echo "Please prepare it first (build_swift_grpo_prompt1_dataset.py)."
+  exit 1
+fi
 
 # ===== Train GRPO-1 =====
-INTERSPEECH_SFT_TOP3="${SFT_TOP3}" \
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 swift rlhf \
@@ -58,11 +64,11 @@ swift rlhf \
   --weight_decay 0.1 \
   --warmup_ratio 0.05 \
   --lr_scheduler_type cosine \
-  --logging_steps 20 \
-  --save_steps 100 \
+  --logging_steps "${LOGGING_STEPS}" \
+  --save_steps "${SAVE_STEPS}" \
   --save_total_limit 10 \
-  --dataloader_num_workers 4 \
-  --dataset_num_proc 4 \
+  --dataloader_num_workers "${DATALOADER_NUM_WORKERS}" \
+  --dataset_num_proc "${DATASET_NUM_PROC}" \
   --deepspeed zero2 \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard \
