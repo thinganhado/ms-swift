@@ -88,7 +88,7 @@ swift rlhf \
   --num_train_epochs 2 \
   --max_steps -1 \
   --max_completion_length 128 \
-  --max_length 128 \
+  --max_length 768 \
   --per_device_train_batch_size 8 \
   --gradient_accumulation_steps 1 \
   --learning_rate 1e-5 \
