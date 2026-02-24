@@ -102,6 +102,7 @@ fi
 
 # Keep OUTPUT_DIR as the per-run directory used by swift and post-run parsing.
 OUTPUT_DIR="${RUN_OUTPUT_DIR}"
+export OUTPUT_DIR RUN_TAG
 mkdir -p "${OUTPUT_DIR}"
 echo "Run tag: ${RUN_TAG}"
 echo "Run output dir: ${OUTPUT_DIR}"
