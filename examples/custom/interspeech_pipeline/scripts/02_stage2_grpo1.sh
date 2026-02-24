@@ -3,7 +3,8 @@ set -euo pipefail
 
 # ===== User-settable =====
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/stage1_mt_lora_Qwen3-VL-8B-Instruct_merged/}"
-GRPO1_JSON_SWIFT="${GRPO1_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/stage1_train_swift_grpo1.json}"
+TRAIN_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_train_swift.json"
+VAL_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
 
@@ -25,9 +26,12 @@ if [[ $# -ge 1 && -n "${1:-}" ]]; then
   MODEL_ID="$1"
 fi
 
-if [[ ! -f "${GRPO1_JSON_SWIFT}" ]]; then
-  echo "ERROR: GRPO1 dataset not found: ${GRPO1_JSON_SWIFT}"
-  echo "Please prepare it first (build_swift_grpo_prompt1_dataset.py)."
+if [[ ! -f "${TRAIN_JSON_SWIFT}" ]]; then
+  echo "ERROR: training dataset not found: ${TRAIN_JSON_SWIFT}"
+  exit 1
+fi
+if [[ ! -f "${VAL_JSON_SWIFT}" ]]; then
+  echo "ERROR: validation dataset not found: ${VAL_JSON_SWIFT}"
   exit 1
 fi
 
@@ -37,7 +41,7 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 swift rlhf \
   --rlhf_type grpo \
   --model "${MODEL_ID}" \
-  --dataset "${GRPO1_JSON_SWIFT}" \
+  --dataset "${TRAIN_JSON_SWIFT}" \
   --system "${SYSTEM_PROMPT_FILE}" \
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py \
   --reward_funcs external_interspeech_p1 \
