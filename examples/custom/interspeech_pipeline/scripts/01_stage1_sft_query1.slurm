@@ -35,6 +35,7 @@ DISABLE_EVAL="${DISABLE_EVAL:-0}"
 NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-3}"
 PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-10}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+TORCH_DTYPE="${TORCH_DTYPE:-float16}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.1}"
 WARMUP_RATIO="${WARMUP_RATIO:-0.03}"
@@ -85,6 +86,7 @@ allowed = [
     "DISABLE_EVAL",
     "PER_DEVICE_TRAIN_BATCH_SIZE",
     "GRADIENT_ACCUMULATION_STEPS",
+    "TORCH_DTYPE",
     "LEARNING_RATE",
     "WEIGHT_DECAY",
     "WARMUP_RATIO",
@@ -188,7 +190,7 @@ swift sft \
   "${VAL_DATASET_ARGS[@]}" \
   --system "${SYSTEM_PROMPT}" \
   --tuner_type lora \
-  --torch_dtype float16 \
+  --torch_dtype "${TORCH_DTYPE}" \
   --lora_rank 8 \
   --lora_alpha 32 \
   --lora_dropout 0.05 \
