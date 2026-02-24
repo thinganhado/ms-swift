@@ -15,6 +15,8 @@ TRAIN_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspee
 VAL_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
+CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1-cache}"
+TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_grpo1}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
@@ -42,6 +44,19 @@ if [[ ! -f "${VAL_JSON_SWIFT}" ]]; then
   echo "ERROR: validation dataset not found: ${VAL_JSON_SWIFT}"
   exit 1
 fi
+
+mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
+  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${TMPDIR_BASE}"
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
+export HF_HOME="${CACHE_ROOT}/hf"
+export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
+export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
+export TMPDIR="${TMPDIR_BASE}"
 
 # ===== Train GRPO-1 =====
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
