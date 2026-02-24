@@ -53,7 +53,7 @@ class InterspeechPrompt1Reward(ORM):
 
     W_NDCG = 1.0
     W_FORMAT = 0.1
-    W_NOVELTY = 0.5
+    W_NOVELTY = 0.0
     W_DIVERSITY = 0.0
 
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
