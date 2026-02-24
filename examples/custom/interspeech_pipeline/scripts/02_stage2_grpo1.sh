@@ -47,7 +47,7 @@ if [[ ! -f "${VAL_JSON_SWIFT}" ]]; then
 fi
 
 mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
-  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" \
+  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${CACHE_ROOT}/vllm" \
   "${CACHE_ROOT}/flashinfer" "${TMPDIR_BASE}"
 export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
 export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
@@ -58,6 +58,8 @@ export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
 export DATASETS_CACHE="${CACHE_ROOT}/datasets"
 export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
 export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
+export VLLM_CONFIG_ROOT="${CACHE_ROOT}/vllm"
+export VLLM_NO_USAGE_STATS="${VLLM_NO_USAGE_STATS:-1}"
 export FLASHINFER_WORKSPACE_BASE="${CACHE_ROOT}"
 export FLASHINFER_WORKSPACE_DIR="${CACHE_ROOT}/flashinfer"
 export FLASHINFER_JIT_CACHE_DIR="${FLASHINFER_WORKSPACE_DIR}"
