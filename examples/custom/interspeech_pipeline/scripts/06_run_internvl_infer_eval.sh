@@ -16,6 +16,7 @@ OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-/datasets/work/dss-deepfake-audio/work/data/
 SHARD_COUNT="${SHARD_COUNT:-4}"
 OVERWRITE="${OVERWRITE:-1}"
 RUN_TAG="${RUN_TAG:-eval_$(date +%Y%m%d_%H%M%S)}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-1500}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_DIR="$(cd "${SCRIPT_DIR}/../tools" && pwd)"
@@ -31,6 +32,7 @@ echo "[run] INTERNVL_DIR=${INTERNVL_DIR}"
 echo "[run] MODEL_ID=${MODEL_ID}"
 echo "[run] META_JSON=${META_JSON}"
 echo "[run] RUN_DIR=${RUN_DIR}"
+echo "[run] VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN}"
 
 conda activate vllm
 cd "${INTERNVL_DIR}"
@@ -40,6 +42,7 @@ META_JSON="${META_JSON}" \
 RUN_TAG="${RUN_TAG}" \
 SHARD_COUNT="${SHARD_COUNT}" \
 OVERWRITE="${OVERWRITE}" \
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN}" \
 bash run_internvl_baseline_stage1_interactive.sh
 
 for s in "${RUN_DIR}"/shard_*_of_${SHARD_COUNT}; do
@@ -55,4 +58,3 @@ python "${TOOLS_DIR}/eval_baseline_strongvlm_localization.py" \
 
 echo "[done] merged_dir=${MERGED_DIR}"
 echo "[done] eval_json=${EVAL_JSON}"
-
