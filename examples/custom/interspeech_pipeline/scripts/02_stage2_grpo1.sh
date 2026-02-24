@@ -17,6 +17,8 @@ DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
 LOGGING_STEPS="${LOGGING_STEPS:-100}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
+AUTO_MERGE_AFTER_TRAIN="${AUTO_MERGE_AFTER_TRAIN:-1}"
+MERGE_SOURCE="${MERGE_SOURCE:-best}" # best | last
 
 # Optional positional override: first arg as MODEL_ID
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
@@ -73,3 +75,52 @@ swift rlhf \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard \
   --log_completions true
+
+if [[ "${AUTO_MERGE_AFTER_TRAIN}" == "1" ]]; then
+  if ! command -v swift >/dev/null 2>&1; then
+    echo "WARN: swift command not found in PATH; skipping merge export."
+    exit 0
+  fi
+
+  MERGE_CKPT="$(
+    python - "${OUTPUT_DIR}" "${MERGE_SOURCE}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).expanduser().resolve()
+merge_source = sys.argv[2].strip().lower()
+
+states = sorted(root.rglob("trainer_state.json"), key=lambda p: p.stat().st_mtime)
+if not states:
+    print("")
+    raise SystemExit(0)
+
+state = json.loads(states[-1].read_text(encoding="utf-8"))
+best_ckpt = str(state.get("best_model_checkpoint", "")).strip()
+last_ckpt = str(state.get("last_model_checkpoint", "")).strip()
+
+if merge_source == "last":
+    print(last_ckpt or best_ckpt)
+else:
+    print(best_ckpt or last_ckpt)
+PY
+  )"
+
+  if [[ -z "${MERGE_CKPT}" ]]; then
+    echo "WARN: Could not find best/last checkpoint under ${OUTPUT_DIR}; skipping merge export."
+    exit 0
+  fi
+  if [[ ! -d "${MERGE_CKPT}" ]]; then
+    echo "WARN: Selected merge checkpoint does not exist as directory: ${MERGE_CKPT}"
+    exit 0
+  fi
+
+  MERGED_OUT="${MERGE_CKPT%/}-merged"
+  echo "[merge] source=${MERGE_CKPT}"
+  echo "[merge] output=${MERGED_OUT}"
+  swift export \
+    --adapters "${MERGE_CKPT}" \
+    --merge_lora true \
+    --output_dir "${MERGED_OUT}"
+fi
