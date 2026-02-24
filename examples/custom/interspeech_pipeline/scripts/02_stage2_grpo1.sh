@@ -14,7 +14,7 @@ MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 TRAIN_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_train_swift.json"
 VAL_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/}"
-SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
+SYSTEM_PROMPT="${SYSTEM_PROMPT:-As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs.}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 
@@ -70,7 +70,7 @@ swift rlhf \
   --rlhf_type grpo \
   --model "${MODEL_ID}" \
   --dataset "${TRAIN_JSON_SWIFT}" \
-  --system "${SYSTEM_PROMPT_FILE}" \
+  --system "${SYSTEM_PROMPT}" \
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py \
   --reward_funcs external_interspeech_p1 \
   --use_vllm "${USE_VLLM}" \
