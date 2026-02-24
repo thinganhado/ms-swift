@@ -15,8 +15,8 @@ TRAIN_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspee
 VAL_JSON_SWIFT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/}"
 SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/prompts/region_forensics_system.txt}"
-CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1-cache}"
-TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_grpo1}"
+CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
+TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
