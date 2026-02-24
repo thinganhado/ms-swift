@@ -45,6 +45,10 @@ TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 TRAINING_CONFIG_JSON="${TRAINING_CONFIG_JSON:-}"
+OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-${OUTPUT_DIR}}"
+RESUME_SEARCH_DIR="${RESUME_SEARCH_DIR:-${OUTPUT_DIR_BASE}}"
+RUN_TAG="${RUN_TAG:-job${SLURM_JOB_ID:-manual_$(date +%Y%m%d_%H%M%S)}}"
+RUN_OUTPUT_DIR="${RUN_OUTPUT_DIR:-${OUTPUT_DIR_BASE%/}/${RUN_TAG}}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
@@ -71,6 +75,10 @@ allowed = [
     "SFT_VAL_JSON_SWIFT",
     "EVAL_MAX_SAMPLES",
     "OUTPUT_DIR",
+    "OUTPUT_DIR_BASE",
+    "RESUME_SEARCH_DIR",
+    "RUN_TAG",
+    "RUN_OUTPUT_DIR",
     "SAVE_STEPS",
     "MAX_LENGTH",
     "NUM_TRAIN_EPOCHS",
@@ -91,6 +99,13 @@ PY
   )"
   echo "Loaded training config: ${TRAINING_CONFIG_JSON}"
 fi
+
+# Keep OUTPUT_DIR as the per-run directory used by swift and post-run parsing.
+OUTPUT_DIR="${RUN_OUTPUT_DIR}"
+mkdir -p "${OUTPUT_DIR}"
+echo "Run tag: ${RUN_TAG}"
+echo "Run output dir: ${OUTPUT_DIR}"
+echo "Resume search dir: ${RESUME_SEARCH_DIR}"
 
 mkdir -p /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs
 mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${TMPDIR_BASE}"
@@ -122,12 +137,30 @@ if [ -n "${RESUME_FROM_CHECKPOINT}" ]; then
   RESUME_ARGS=(--resume_from_checkpoint "${RESUME_FROM_CHECKPOINT}")
   echo "Resuming from explicit checkpoint: ${RESUME_FROM_CHECKPOINT}"
 elif [ "${AUTO_RESUME}" = "1" ]; then
-  LATEST_CKPT="$(ls -d "${OUTPUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)"
+  LATEST_CKPT="$(
+    python - "${RESUME_SEARCH_DIR}" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).expanduser().resolve()
+if not root.exists():
+    print("")
+    raise SystemExit(0)
+
+candidates = [p for p in root.rglob("checkpoint-*") if p.is_dir()]
+if not candidates:
+    print("")
+    raise SystemExit(0)
+
+latest = max(candidates, key=lambda p: p.stat().st_mtime)
+print(str(latest))
+PY
+  )"
   if [ -n "${LATEST_CKPT}" ]; then
     RESUME_ARGS=(--resume_from_checkpoint "${LATEST_CKPT}")
     echo "Auto-resume from latest checkpoint: ${LATEST_CKPT}"
   else
-    echo "No existing checkpoint found under ${OUTPUT_DIR}; starting fresh."
+    echo "No existing checkpoint found under ${RESUME_SEARCH_DIR}; starting fresh."
   fi
 else
   echo "AUTO_RESUME=0; starting fresh."
@@ -209,6 +242,9 @@ if not best_ckpt:
 if best_ckpt:
     print(f"BEST_CHECKPOINT={best_ckpt}")
     out.mkdir(parents=True, exist_ok=True)
+    run_tag = os.environ.get("RUN_TAG", "")
+    if run_tag:
+        (out / f"best_query1_checkpoint_{run_tag}.txt").write_text(best_ckpt + "\n", encoding="utf-8")
     (out / "best_query1_checkpoint.txt").write_text(best_ckpt + "\n", encoding="utf-8")
 else:
     print("WARN: could not determine best checkpoint")
