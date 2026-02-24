@@ -23,6 +23,7 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 USE_VLLM="${USE_VLLM:-true}"
 VLLM_MODE="${VLLM_MODE:-colocate}"
 VLLM_TP="${VLLM_TP:-1}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.75}"
 SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
@@ -71,6 +72,7 @@ swift rlhf \
   --use_vllm "${USE_VLLM}" \
   --vllm_mode "${VLLM_MODE}" \
   --vllm_tensor_parallel_size "${VLLM_TP}" \
+  --vllm_gpu_memory_utilization "${VLLM_GPU_MEMORY_UTILIZATION}" \
   --sleep_level "${SLEEP_LEVEL}" \
   --beta 0.01 \
   --num_generations 8 \
