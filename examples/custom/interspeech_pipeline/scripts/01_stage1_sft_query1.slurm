@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --time=31:00:00
 #SBATCH --output=/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs/%x_%j.out
 #SBATCH --error=/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT/query1/logs/%x_%j.err
@@ -26,28 +26,28 @@ cd /scratch3/che489/Ha/interspeech/training/ms-swift
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen3-VL-8B-Instruct/}"
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_train_swift.json}"
 SFT_VAL_JSON_SWIFT="${SFT_VAL_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data/stage1_query1_val_swift.json}"
-EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-30}"
+EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-10}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_query1_lora_Qwen3-VL-8B-Instruct}"
 SYSTEM_PROMPT="As an expert in deepfake speech spectrogram forensics, you can detect regions containing deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your three chosen region IDs."
-SAVE_STEPS="${SAVE_STEPS:-200}"
+SAVE_STEPS="${SAVE_STEPS:-500}"
 MAX_LENGTH="${MAX_LENGTH:-768}"
 DISABLE_EVAL="${DISABLE_EVAL:-0}"
 NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-3}"
-PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-8}"
+PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-10}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 LEARNING_RATE="${LEARNING_RATE:-1e-4}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.1}"
 WARMUP_RATIO="${WARMUP_RATIO:-0.03}"
-DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
-DATASET_NUM_PROC="${DATASET_NUM_PROC:-1}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-10}"
+DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 TRAINING_CONFIG_JSON="${TRAINING_CONFIG_JSON:-}"
 
-NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 
 if [ -n "${TRAINING_CONFIG_JSON}" ]; then
   if [ ! -f "${TRAINING_CONFIG_JSON}" ]; then
@@ -173,7 +173,7 @@ swift sft \
   "${EVAL_ARGS[@]}" \
   --max_pixels 524288 \
   --deepspeed zero2 \
-  --logging_steps 10 \
+  --logging_steps 100 \
   --save_steps "${SAVE_STEPS}" \
   --save_total_limit 5 \
   --dataloader_num_workers "${DATALOADER_NUM_WORKERS}" \
