@@ -1,6 +1,7 @@
 import math
 import os
 import re
+from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Sequence
 
 from swift.rewards import ORM, orms
@@ -55,6 +56,26 @@ class InterspeechPrompt1Reward(ORM):
     W_FORMAT = 0.1
     W_NOVELTY = 0.0
     W_DIVERSITY = 0.0
+    W_DUP = float(os.getenv("INTERSPEECH_W_DUP", "0.05"))
+    W_ID_FREQ = float(os.getenv("INTERSPEECH_W_ID_FREQ", "0.03"))
+    W_TRIPLET = float(os.getenv("INTERSPEECH_W_TRIPLET", "0.02"))
+    EMA_DECAY = float(os.getenv("INTERSPEECH_EMA_DECAY", "0.95"))
+    MAX_DIVERSITY_PENALTY = float(os.getenv("INTERSPEECH_MAX_DIVERSITY_PENALTY", "0.2"))
+
+    def __init__(self):
+        super().__init__()
+        self._id_ema = defaultdict(float)
+        self._triplet_ema = defaultdict(float)
+
+    @staticmethod
+    def _clip_top3_any(text: str) -> Optional[List[int]]:
+        ids = _parse_ids(text)
+        if len(ids) < 3:
+            return None
+        pred = ids[:3]
+        if any(i < 1 or i > 16 for i in pred):
+            return None
+        return pred
 
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
         gt_source = gt_regions if gt_regions is not None else assistant
@@ -62,26 +83,72 @@ class InterspeechPrompt1Reward(ORM):
         sft_source = sft_top3
 
         rewards: List[float] = []
+        batch_preds_for_ema: List[List[int]] = []
         for i, completion in enumerate(completions):
             pred = _parse_pred_top3(completion)
             fmt = 1.0 if pred is not None else 0.0
-            if pred is None:
-                rewards.append(0.0)
-                continue
+            pred_any = self._clip_top3_any(completion)
 
             gt_text = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
             gt_ids = _parse_ids(gt_text)
-            ndcg = _ndcg_at_3(pred, gt_ids) if gt_ids else 0.0
+            ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
 
             sft_text = (
                 sft_source[i] if sft_source is not None and i < len(sft_source) else default_sft
             )
-            pred_set = set(pred)
+            pred_set = set(pred) if pred is not None else set()
             gt_set = set(gt_ids)
             sft_set = set(_parse_ids(sft_text))
-            novelty = (len(pred_set & gt_set) - len(pred_set & sft_set)) / float(len(pred_set))
+            novelty = 0.0
+            if pred_set:
+                novelty = (len(pred_set & gt_set) - len(pred_set & sft_set)) / float(len(pred_set))
 
-            rewards.append(self.W_NDCG * ndcg + self.W_FORMAT * fmt + self.W_NOVELTY * novelty + self.W_DIVERSITY * 0.0)
+            # Anti-collapse regularization:
+            # - duplicate IDs in top-3
+            # - globally overused IDs (EMA frequency)
+            # - globally repeated triplets (EMA frequency)
+            dup_penalty = 0.0
+            id_freq_penalty = 0.0
+            triplet_penalty = 0.0
+            if pred_any is not None:
+                pred_unique = list(dict.fromkeys(pred_any))
+                dup_cnt = len(pred_any) - len(set(pred_any))
+                dup_penalty = -dup_cnt / 2.0
+
+                if pred_unique:
+                    id_freq_penalty = -sum(self._id_ema[rid] for rid in pred_unique) / len(pred_unique)
+                triplet_penalty = -self._triplet_ema[tuple(pred_any)]
+                batch_preds_for_ema.append(pred_any)
+
+            anti_collapse = (
+                self.W_DUP * dup_penalty
+                + self.W_ID_FREQ * id_freq_penalty
+                + self.W_TRIPLET * triplet_penalty
+            )
+            anti_collapse = max(-self.MAX_DIVERSITY_PENALTY, min(0.0, anti_collapse))
+
+            base_reward = self.W_NDCG * ndcg + self.W_FORMAT * fmt + self.W_NOVELTY * novelty
+            rewards.append(base_reward + self.W_DIVERSITY * 0.0 + anti_collapse)
+
+        # Update EMA stats after scoring the batch.
+        if batch_preds_for_ema:
+            id_counts = Counter()
+            triplet_counts = Counter()
+            for pred_any in batch_preds_for_ema:
+                for rid in set(pred_any):
+                    id_counts[rid] += 1
+                triplet_counts[tuple(pred_any)] += 1
+
+            bsz = float(len(batch_preds_for_ema))
+            one_minus_decay = 1.0 - self.EMA_DECAY
+
+            for rid, cnt in id_counts.items():
+                freq = cnt / bsz
+                self._id_ema[rid] = self.EMA_DECAY * self._id_ema[rid] + one_minus_decay * freq
+
+            for trip, cnt in triplet_counts.items():
+                freq = cnt / bsz
+                self._triplet_ema[trip] = self.EMA_DECAY * self._triplet_ema[trip] + one_minus_decay * freq
 
         return rewards
 
