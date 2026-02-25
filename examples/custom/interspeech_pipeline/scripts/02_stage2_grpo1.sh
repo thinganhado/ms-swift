@@ -24,6 +24,7 @@ USE_VLLM="${USE_VLLM:-true}"
 VLLM_MODE="${VLLM_MODE:-colocate}"
 VLLM_TP="${VLLM_TP:-1}"
 VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.75}"
+TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
 SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
 DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
@@ -99,7 +100,7 @@ swift rlhf \
   --freeze_llm true \
   --freeze_vit true \
   --freeze_aligner false \
-  --torch_dtype float16 \
+  --torch_dtype "${TORCH_DTYPE}" \
   --num_train_epochs "${NUM_TRAIN_EPOCHS}" \
   --max_steps -1 \
   --max_completion_length 128 \
