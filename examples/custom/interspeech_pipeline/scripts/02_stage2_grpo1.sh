@@ -29,6 +29,7 @@ DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
 LOGGING_STEPS="${LOGGING_STEPS:-100}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
+NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-2}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 AUTO_MERGE_AFTER_TRAIN="${AUTO_MERGE_AFTER_TRAIN:-1}"
 MERGE_SOURCE="${MERGE_SOURCE:-best}" # best | last
@@ -98,7 +99,7 @@ swift rlhf \
   --freeze_vit true \
   --freeze_aligner false \
   --torch_dtype float16 \
-  --num_train_epochs 2 \
+  --num_train_epochs "${NUM_TRAIN_EPOCHS}" \
   --max_steps -1 \
   --max_completion_length 128 \
   --max_length 768 \
