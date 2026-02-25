@@ -29,6 +29,7 @@ DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
 LOGGING_STEPS="${LOGGING_STEPS:-100}"
 SAVE_STEPS="${SAVE_STEPS:-200}"
+RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 AUTO_MERGE_AFTER_TRAIN="${AUTO_MERGE_AFTER_TRAIN:-1}"
 MERGE_SOURCE="${MERGE_SOURCE:-best}" # best | last
 
@@ -44,6 +45,12 @@ fi
 if [[ ! -f "${VAL_JSON_SWIFT}" ]]; then
   echo "ERROR: validation dataset not found: ${VAL_JSON_SWIFT}"
   exit 1
+fi
+
+RESUME_ARGS=()
+if [[ -n "${RESUME_FROM_CHECKPOINT}" ]]; then
+  RESUME_ARGS=(--resume_from_checkpoint "${RESUME_FROM_CHECKPOINT}")
+  echo "[run] Resuming from checkpoint: ${RESUME_FROM_CHECKPOINT}"
 fi
 
 mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
@@ -109,7 +116,8 @@ swift rlhf \
   --deepspeed zero2 \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard \
-  --log_completions true
+  --log_completions true \
+  "${RESUME_ARGS[@]}"
 
 if [[ "${AUTO_MERGE_AFTER_TRAIN}" == "1" ]]; then
   if ! command -v swift >/dev/null 2>&1; then
