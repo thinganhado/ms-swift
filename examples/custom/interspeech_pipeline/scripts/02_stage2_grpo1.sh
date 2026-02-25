@@ -79,6 +79,7 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 swift rlhf \
   --rlhf_type grpo \
   --model "${MODEL_ID}" \
+  --model_kwargs '{"fix_mistral_regex": true}' \
   --dataset "${TRAIN_JSON_SWIFT}" \
   --system "${SYSTEM_PROMPT}" \
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py \
