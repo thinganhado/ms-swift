@@ -1,4 +1,5 @@
 # Copyright (c) ModelScope Contributors. All rights reserved.
+import json
 import math
 import os
 import torch
@@ -261,7 +262,20 @@ class ModelLoader(BaseModelLoader):
                 auto_tokenizer_cls = AutoProcessor
             else:
                 auto_tokenizer_cls = AutoTokenizer
-        return auto_tokenizer_cls.from_pretrained(model_dir, trust_remote_code=True)
+        processor_kwargs = {'trust_remote_code': True}
+        if auto_tokenizer_cls is AutoTokenizer and bool(strtobool(os.environ.get('SWIFT_FIX_MISTRAL_REGEX', 'true'))):
+            tokenizer_cfg_path = os.path.join(model_dir, 'tokenizer_config.json')
+            if os.path.exists(tokenizer_cfg_path):
+                try:
+                    with open(tokenizer_cfg_path, 'r', encoding='utf-8') as f:
+                        tokenizer_cfg = json.load(f)
+                    tokenizer_class = str(tokenizer_cfg.get('tokenizer_class', '')).lower()
+                    model_type = str(tokenizer_cfg.get('model_type', '')).lower()
+                    if 'mistral' in tokenizer_class or 'mistral' in model_type:
+                        processor_kwargs['fix_mistral_regex'] = True
+                except Exception as e:
+                    logger.warning(f'Failed to inspect tokenizer_config.json for mistral regex fix: {e}')
+        return auto_tokenizer_cls.from_pretrained(model_dir, **processor_kwargs)
 
     def get_model(self, model_dir: str, config: PretrainedConfig, processor: Processor,
                   model_kwargs) -> PreTrainedModel:
