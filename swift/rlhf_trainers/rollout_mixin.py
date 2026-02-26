@@ -130,6 +130,8 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_require_valid = os.getenv('GRPO_DEDUPE_REQUIRE_VALID', '0').lower() in {
             '1', 'true', 'yes', 'on'
         }
+        self.grpo_dedupe_overlap_reject = max(1, int(os.getenv('GRPO_DEDUPE_OVERLAP_REJECT', '2')))
+        self.grpo_dedupe_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_ID_CAP', '3')))
 
         self.disable_rollout_importance_sampling = False
 
@@ -1234,16 +1236,36 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             total_retried = 0
             total_replaced = 0
             for _, idxs in grouped_indices.items():
-                seen = set()
+                accepted_triplets: List[Tuple[int, int, int]] = []
+                id_counts: Dict[int, int] = {}
+
+                def _violates_diversity(triplet: Tuple[int, int, int]) -> bool:
+                    # Rule 1: reject high-overlap candidate with any accepted triplet.
+                    tset = set(triplet)
+                    for prev in accepted_triplets:
+                        if len(tset & set(prev)) >= self.grpo_dedupe_overlap_reject:
+                            return True
+                    # Rule 2: reject if any ID exceeds per-group cap.
+                    for rid in triplet:
+                        if id_counts.get(rid, 0) + 1 > self.grpo_dedupe_id_cap:
+                            return True
+                    return False
+
+                def _accept_triplet(triplet: Optional[Tuple[int, int, int]]) -> None:
+                    if triplet is None:
+                        return
+                    accepted_triplets.append(triplet)
+                    for rid in triplet:
+                        id_counts[rid] = id_counts.get(rid, 0) + 1
+
                 for idx in idxs:
                     cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
                     cur_valid = cur_triplet is not None
                     needs_retry = (self.grpo_dedupe_require_valid and not cur_valid) or (
-                        cur_valid and cur_triplet in seen)
+                        cur_valid and _violates_diversity(cur_triplet))
 
                     if not needs_retry:
-                        if cur_valid:
-                            seen.add(cur_triplet)
+                        _accept_triplet(cur_triplet)
                         continue
 
                     # Build a prompt-only input for retry.
@@ -1268,25 +1290,23 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         cand_valid = cand_triplet is not None
                         if self.grpo_dedupe_require_valid and not cand_valid:
                             continue
-                        if cand_valid and cand_triplet in seen:
+                        if cand_valid and _violates_diversity(cand_triplet):
                             continue
                         merged[idx] = candidate
                         replaced = True
                         total_replaced += 1
-                        if cand_valid:
-                            seen.add(cand_triplet)
+                        _accept_triplet(cand_triplet)
                         break
 
                     if not replaced:
                         # Keep original sample when retry budget is exhausted.
-                        cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
-                        if cur_triplet is not None:
-                            seen.add(cur_triplet)
+                        _accept_triplet(self._extract_triplet_from_messages(merged[idx].get('messages', [])))
 
             if total_retried > 0:
                 logger.info(
                     f'Local rollout dedupe: retries={total_retried}, replaced={total_replaced}, '
-                    f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}')
+                    f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}, '
+                    f'overlap_reject={self.grpo_dedupe_overlap_reject}, id_cap={self.grpo_dedupe_id_cap}')
             return merged
 
         global_inputs = gather_object(inputs)
