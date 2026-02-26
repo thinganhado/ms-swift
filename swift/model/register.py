@@ -263,7 +263,7 @@ class ModelLoader(BaseModelLoader):
             else:
                 auto_tokenizer_cls = AutoTokenizer
         processor_kwargs = {'trust_remote_code': True}
-        if auto_tokenizer_cls is AutoTokenizer and bool(strtobool(os.environ.get('SWIFT_FIX_MISTRAL_REGEX', 'true'))):
+        if bool(strtobool(os.environ.get('SWIFT_FIX_MISTRAL_REGEX', 'true'))):
             tokenizer_cfg_path = os.path.join(model_dir, 'tokenizer_config.json')
             if os.path.exists(tokenizer_cfg_path):
                 try:
@@ -275,7 +275,14 @@ class ModelLoader(BaseModelLoader):
                         processor_kwargs['fix_mistral_regex'] = True
                 except Exception as e:
                     logger.warning(f'Failed to inspect tokenizer_config.json for mistral regex fix: {e}')
-        return auto_tokenizer_cls.from_pretrained(model_dir, **processor_kwargs)
+        try:
+            return auto_tokenizer_cls.from_pretrained(model_dir, **processor_kwargs)
+        except TypeError as e:
+            if 'fix_mistral_regex' in processor_kwargs and 'fix_mistral_regex' in str(e):
+                logger.info('Tokenizer/processor does not accept `fix_mistral_regex`; retrying without it.')
+                processor_kwargs.pop('fix_mistral_regex', None)
+                return auto_tokenizer_cls.from_pretrained(model_dir, **processor_kwargs)
+            raise
 
     def get_model(self, model_dir: str, config: PretrainedConfig, processor: Processor,
                   model_kwargs) -> PreTrainedModel:
