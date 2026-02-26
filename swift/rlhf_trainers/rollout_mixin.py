@@ -133,6 +133,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         }
         self.grpo_dedupe_overlap_reject = max(1, int(os.getenv('GRPO_DEDUPE_OVERLAP_REJECT', '2')))
         self.grpo_dedupe_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_ID_CAP', '3')))
+        self.grpo_dedupe_non_hit_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_NON_HIT_ID_CAP', '1')))
         self.grpo_dedupe_strict = os.getenv('GRPO_DEDUPE_STRICT', '1').lower() in {'1', 'true', 'yes', 'on'}
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
@@ -1324,12 +1325,15 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                 def _violates_diversity(triplet: Tuple[int, int, int], gt_triplet: Optional[Tuple[int, int, int]]) -> bool:
                     # Rule 1: reject high-overlap candidate with any accepted sample on wrong IDs.
                     wset = _wrong_ids(triplet, gt_triplet)
+                    id_cap = (
+                        self.grpo_dedupe_non_hit_id_cap
+                        if self.grpo_dedupe_only_wrong_ids and gt_triplet is not None else self.grpo_dedupe_id_cap)
                     for prev_wset in accepted_wrong_sets:
                         if len(wset & prev_wset) >= self.grpo_dedupe_overlap_reject:
                             return True
                     # Rule 2: reject if any wrong ID exceeds per-group cap.
                     for rid in wset:
-                        if wrong_id_counts.get(rid, 0) + 1 > self.grpo_dedupe_id_cap:
+                        if wrong_id_counts.get(rid, 0) + 1 > id_cap:
                             return True
                     return False
 
@@ -1400,7 +1404,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                                 accepted_triplets=[tuple(sorted(s)) for s in accepted_wrong_sets],
                                 id_counts=wrong_id_counts,
                                 overlap_reject=self.grpo_dedupe_overlap_reject,
-                                id_cap=self.grpo_dedupe_id_cap,
+                                id_cap=(
+                                    self.grpo_dedupe_non_hit_id_cap if (
+                                        self.grpo_dedupe_only_wrong_ids and gt_triplet is not None
+                                    ) else self.grpo_dedupe_id_cap
+                                ),
                             )
                             if repaired is not None:
                                 repaired_final = repaired
@@ -1422,6 +1430,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'Local rollout dedupe: retries={total_retried}, replaced={total_replaced}, '
                     f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}, '
                     f'overlap_reject={self.grpo_dedupe_overlap_reject}, id_cap={self.grpo_dedupe_id_cap}, '
+                    f'non_hit_id_cap={self.grpo_dedupe_non_hit_id_cap}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
                     f'forced_repairs={total_forced_repairs}, '
                     f'strict_failures={total_strict_failures}')
