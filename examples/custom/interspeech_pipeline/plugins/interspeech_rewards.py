@@ -12,8 +12,9 @@ def _parse_ids(text: str) -> List[int]:
 
 def _parse_pred_top3(text: str) -> Optional[List[int]]:
     ids = _parse_ids(text)
-    if len(ids) != 3:
+    if len(ids) < 3:
         return None
+    ids = ids[:3]
     if len(set(ids)) != 3:
         return None
     if any(i < 1 or i > 16 for i in ids):
