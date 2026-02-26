@@ -2,7 +2,6 @@
 import base64
 import concurrent.futures
 import inspect
-import itertools
 import json
 import os
 import re
@@ -134,6 +133,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_overlap_reject = max(1, int(os.getenv('GRPO_DEDUPE_OVERLAP_REJECT', '2')))
         self.grpo_dedupe_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_ID_CAP', '3')))
         self.grpo_dedupe_non_hit_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_NON_HIT_ID_CAP', '1')))
+        self.grpo_dedupe_hit_order_cap = max(1, int(os.getenv('GRPO_DEDUPE_HIT_ORDER_CAP', '1')))
+        self.grpo_dedupe_exact_unique = os.getenv('GRPO_DEDUPE_EXACT_UNIQUE', '1').lower() in {
+            '1', 'true', 'yes', 'on'
+        }
         self.grpo_dedupe_strict = os.getenv('GRPO_DEDUPE_STRICT', '1').lower() in {'1', 'true', 'yes', 'on'}
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
@@ -1055,57 +1058,6 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             return RolloutTrainerMixin._extract_triplet_from_messages(msgs)
         return None
 
-    @staticmethod
-    def _set_triplet_to_messages(messages: List[Dict[str, Any]], triplet: Tuple[int, int, int]) -> None:
-        text = f'{triplet[0]},{triplet[1]},{triplet[2]}'
-        for msg in reversed(messages):
-            if msg.get('role') != 'assistant':
-                continue
-            content = msg.get('content')
-            if isinstance(content, str):
-                msg['content'] = text
-                return
-            if isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get('type') == 'text':
-                        part['text'] = text
-                        return
-                content.append({'type': 'text', 'text': text})
-                return
-        messages.append({'role': 'assistant', 'content': text})
-
-    @staticmethod
-    def _select_repair_triplet(
-        accepted_triplets: List[Tuple[int, int, int]],
-        id_counts: Dict[int, int],
-        overlap_reject: int,
-        id_cap: int,
-    ) -> Optional[Tuple[int, int, int]]:
-        def _violates(candidate: Tuple[int, int, int]) -> bool:
-            cset = set(candidate)
-            for prev in accepted_triplets:
-                if len(cset & set(prev)) >= overlap_reject:
-                    return True
-            for rid in candidate:
-                if id_counts.get(rid, 0) + 1 > id_cap:
-                    return True
-            return False
-
-        all_ids = list(range(1, 17))
-        # Prefer under-used IDs first.
-        all_ids.sort(key=lambda rid: (id_counts.get(rid, 0), rid))
-        best = None
-        best_score = None
-        for combo in itertools.combinations(all_ids, 3):
-            cand = (combo[0], combo[1], combo[2])
-            if _violates(cand):
-                continue
-            score = sum(id_counts.get(x, 0) for x in cand)
-            if best is None or score < best_score:
-                best = cand
-                best_score = score
-        return best
-
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
         if not inputs:
@@ -1310,11 +1262,12 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
 
             total_retried = 0
             total_replaced = 0
-            total_forced_repairs = 0
-            total_strict_failures = 0
+            total_exhausted_violations = 0
             for _, idxs in grouped_indices.items():
                 accepted_wrong_sets: List[set] = []
                 wrong_id_counts: Dict[int, int] = {}
+                hit_order_counts: Dict[Tuple[int, ...], int] = {}
+                accepted_exact_triplets: set[Tuple[int, int, int]] = set()
 
                 def _wrong_ids(triplet: Tuple[int, int, int], gt_triplet: Optional[Tuple[int, int, int]]) -> set:
                     ids = set(triplet)
@@ -1322,7 +1275,21 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         return ids
                     return ids - set(gt_triplet)
 
+                def _hit_order(triplet: Tuple[int, int, int], gt_triplet: Optional[Tuple[int, int, int]]) -> Tuple[Tuple[int, int], ...]:
+                    if not self.grpo_dedupe_only_wrong_ids or gt_triplet is None:
+                        return tuple()
+                    gt_set = set(gt_triplet)
+                    # Position-aware hit pattern; ignore single-hit patterns to avoid over-penalizing
+                    # cases like repeated lone hit ID across candidates.
+                    hits = tuple((pos, x) for pos, x in enumerate(triplet) if x in gt_set)
+                    if len(hits) <= 1:
+                        return tuple()
+                    return hits
+
                 def _violates_diversity(triplet: Tuple[int, int, int], gt_triplet: Optional[Tuple[int, int, int]]) -> bool:
+                    # Rule 0: exact unique triplet within this prompt group.
+                    if self.grpo_dedupe_exact_unique and triplet in accepted_exact_triplets:
+                        return True
                     # Rule 1: reject high-overlap candidate with any accepted sample on wrong IDs.
                     wset = _wrong_ids(triplet, gt_triplet)
                     id_cap = (
@@ -1335,6 +1302,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     for rid in wset:
                         if wrong_id_counts.get(rid, 0) + 1 > id_cap:
                             return True
+                    # Rule 3: in GT-aware mode, do not allow the same hit-order pattern
+                    # (IDs that are in GT, preserving candidate order) more than cap times.
+                    hseq = _hit_order(triplet, gt_triplet)
+                    if hseq and hit_order_counts.get(hseq, 0) + 1 > self.grpo_dedupe_hit_order_cap:
+                        return True
                     return False
 
                 def _accept_triplet(
@@ -1345,8 +1317,12 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         return
                     wset = _wrong_ids(triplet, gt_triplet)
                     accepted_wrong_sets.append(wset)
+                    accepted_exact_triplets.add(triplet)
                     for rid in wset:
                         wrong_id_counts[rid] = wrong_id_counts.get(rid, 0) + 1
+                    hseq = _hit_order(triplet, gt_triplet)
+                    if hseq:
+                        hit_order_counts[hseq] = hit_order_counts.get(hseq, 0) + 1
 
                 for idx in idxs:
                     gt_triplet = self._extract_gt_triplet_from_input(merged[idx])
@@ -1399,31 +1375,14 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         break
 
                     if not replaced:
-                        if self.grpo_dedupe_strict:
-                            repaired = self._select_repair_triplet(
-                                accepted_triplets=[tuple(sorted(s)) for s in accepted_wrong_sets],
-                                id_counts=wrong_id_counts,
-                                overlap_reject=self.grpo_dedupe_overlap_reject,
-                                id_cap=(
-                                    self.grpo_dedupe_non_hit_id_cap if (
-                                        self.grpo_dedupe_only_wrong_ids and gt_triplet is not None
-                                    ) else self.grpo_dedupe_id_cap
-                                ),
-                            )
-                            if repaired is not None:
-                                repaired_final = repaired
-                                self._set_triplet_to_messages(merged[idx]['messages'], repaired_final)
-                                _accept_triplet(repaired_final, gt_triplet)
-                                total_forced_repairs += 1
-                            else:
-                                # Constraint set is infeasible for this point; fallback to original.
-                                _accept_triplet(
-                                    self._extract_triplet_from_messages(merged[idx].get('messages', [])), gt_triplet)
-                                total_strict_failures += 1
+                        # No forced overwrite/repair: keep original sample when retry budget is exhausted.
+                        # If it still violates constraints, do NOT register it into dedupe state.
+                        # This keeps subsequent rollouts from inheriting repeated non-hit IDs.
+                        final_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
+                        if final_triplet is None or not _violates_diversity(final_triplet, gt_triplet):
+                            _accept_triplet(final_triplet, gt_triplet)
                         else:
-                            # Keep original sample when retry budget is exhausted.
-                            _accept_triplet(
-                                self._extract_triplet_from_messages(merged[idx].get('messages', [])), gt_triplet)
+                            total_exhausted_violations += 1
 
             if total_retried > 0:
                 logger.info(
@@ -1431,9 +1390,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}, '
                     f'overlap_reject={self.grpo_dedupe_overlap_reject}, id_cap={self.grpo_dedupe_id_cap}, '
                     f'non_hit_id_cap={self.grpo_dedupe_non_hit_id_cap}, '
+                    f'hit_order_cap={self.grpo_dedupe_hit_order_cap}, '
+                    f'exact_unique={self.grpo_dedupe_exact_unique}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
-                    f'forced_repairs={total_forced_repairs}, '
-                    f'strict_failures={total_strict_failures}')
+                    f'forced_repairs=0, strict_failures=0, exhausted_violations={total_exhausted_violations}')
             return merged
 
         global_inputs = gather_object(inputs)
