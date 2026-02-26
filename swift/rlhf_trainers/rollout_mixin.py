@@ -137,6 +137,12 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_exact_unique = os.getenv('GRPO_DEDUPE_EXACT_UNIQUE', '1').lower() in {
             '1', 'true', 'yes', 'on'
         }
+        self.grpo_retry_use_gt_feedback = os.getenv('GRPO_RETRY_USE_GT_FEEDBACK', '1').lower() in {
+            '1', 'true', 'yes', 'on'
+        }
+        self.grpo_retry_require_improvement = os.getenv('GRPO_RETRY_REQUIRE_IMPROVEMENT', '1').lower() in {
+            '1', 'true', 'yes', 'on'
+        }
         self.grpo_dedupe_strict = os.getenv('GRPO_DEDUPE_STRICT', '1').lower() in {'1', 'true', 'yes', 'on'}
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
@@ -1329,6 +1335,16 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     if hseq:
                         hit_order_counts[hseq] = hit_order_counts.get(hseq, 0) + 1
 
+                def _feedback_score(
+                    triplet: Optional[Tuple[int, int, int]],
+                    gt_triplet: Optional[Tuple[int, int, int]],
+                ) -> Tuple[int, int]:
+                    if triplet is None or gt_triplet is None:
+                        return (0, 0)
+                    membership_hits = len(set(triplet) & set(gt_triplet))
+                    positional_hits = sum(1 for p, g in zip(triplet, gt_triplet) if p == g)
+                    return (membership_hits, positional_hits)
+
                 for idx in idxs:
                     gt_triplet = self._extract_gt_triplet_from_input(merged[idx])
                     cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
@@ -1350,6 +1366,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                             base_input.pop(stale_key)
 
                     replaced = False
+                    best_membership, best_positional = _feedback_score(cur_triplet, gt_triplet)
                     base_temp = float(self.request_config.temperature
                                       ) if self.request_config.temperature is not None else 1.0
                     base_top_p = float(self.request_config.top_p) if self.request_config.top_p is not None else 0.95
@@ -1374,6 +1391,15 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                             continue
                         if cand_valid and _violates_diversity(cand_triplet, gt_triplet):
                             continue
+                        if (self.grpo_retry_use_gt_feedback and gt_triplet is not None and cand_valid
+                                and self.grpo_retry_require_improvement):
+                            cand_membership, cand_positional = _feedback_score(cand_triplet, gt_triplet)
+                            improved = (
+                                cand_membership > best_membership
+                                or (cand_membership == best_membership and cand_positional > best_positional))
+                            if not improved:
+                                continue
+                            best_membership, best_positional = cand_membership, cand_positional
                         merged[idx] = candidate
                         replaced = True
                         total_replaced += 1
@@ -1398,6 +1424,8 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'non_hit_id_cap={self.grpo_dedupe_non_hit_id_cap}, '
                     f'hit_order_cap={self.grpo_dedupe_hit_order_cap}, '
                     f'exact_unique={self.grpo_dedupe_exact_unique}, '
+                    f'gt_feedback={self.grpo_retry_use_gt_feedback}, '
+                    f'require_improvement={self.grpo_retry_require_improvement}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
                     f'forced_repairs=0, strict_failures=0, exhausted_violations={total_exhausted_violations}')
             return merged
