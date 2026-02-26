@@ -43,6 +43,8 @@ DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-16}"
 DATASET_NUM_PROC="${DATASET_NUM_PROC:-8}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q1}"
+SFT_DEBUG_GT="${SFT_DEBUG_GT:-1}"
+SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-8}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 TRAINING_CONFIG_JSON="${TRAINING_CONFIG_JSON:-}"
@@ -133,6 +135,71 @@ fi
 if [ ! -f "${SFT_VAL_JSON_SWIFT}" ]; then
   echo "ERROR: validation dataset not found: ${SFT_VAL_JSON_SWIFT}"
   exit 1
+fi
+
+if [ "${SFT_DEBUG_GT}" = "1" ]; then
+  python - "${SFT_JSON_SWIFT}" "${SFT_VAL_JSON_SWIFT}" "${SFT_DEBUG_SAMPLES}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+train_p = Path(sys.argv[1])
+val_p = Path(sys.argv[2])
+n_show = max(1, int(sys.argv[3]))
+
+
+def parse_ids(text):
+    return [int(x) for x in re.findall(r"\d+", str(text or ""))]
+
+
+def extract_assistant_text(row):
+    msgs = row.get("messages", [])
+    for m in msgs:
+        if m.get("role") != "assistant":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            parts = []
+            for item in c:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+            if parts:
+                return "\n".join(parts)
+    return ""
+
+
+def inspect(path: Path, tag: str):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    total = len(data)
+    null_gt = 0
+    parsed_ge3 = 0
+    print(f"[sft_gt] {tag}_rows={total}")
+    for i, row in enumerate(data):
+        gt_text = extract_assistant_text(row)
+        ids = parse_ids(gt_text)
+        if not gt_text.strip():
+            null_gt += 1
+        if len(ids) >= 3:
+            parsed_ge3 += 1
+        if i < n_show:
+            sid = row.get("sample_id", f"{tag}_{i}")
+            print(
+                f"[sft_gt] {tag} i={i} sample_id={sid} gt_text={gt_text!r} parsed_ids={ids[:3]}",
+                flush=True,
+            )
+    print(
+        f"[sft_gt] {tag}_null_or_empty_gt={null_gt} "
+        f"{tag}_rows_with_gte3_ids={parsed_ge3}",
+        flush=True,
+    )
+
+
+inspect(train_p, "train")
+inspect(val_p, "val")
+PY
 fi
 
 RESUME_ARGS=()
