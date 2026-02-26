@@ -59,9 +59,13 @@ class InterspeechPrompt1Reward(ORM):
         self._log_every_steps = max(1, int(os.getenv("INTERSPEECH_LOG_EVERY_STEPS", "1")))
         self._group_size_for_metrics = max(1, int(os.getenv("INTERSPEECH_GROUP_SIZE", "8")))
         self._rank = int(os.getenv("RANK", os.getenv("LOCAL_RANK", "0")))
+        self._debug_reward = os.getenv("INTERSPEECH_DEBUG_REWARD", "0").lower() in {"1", "true", "yes", "on"}
+        self._debug_print_samples = max(1, int(os.getenv("INTERSPEECH_DEBUG_SAMPLES", "8")))
+        self._debug_source_printed = False
 
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
         gt_source = gt_regions if gt_regions is not None else assistant
+        gt_source_name = "gt_regions" if gt_regions is not None else "assistant"
 
         rewards: List[float] = []
         valid_count = 0
@@ -123,6 +127,25 @@ class InterspeechPrompt1Reward(ORM):
                 f"unique_list_rate={unique_list_rate:.2f}%",
                 flush=True,
             )
+            if self._debug_reward:
+                if not self._debug_source_printed:
+                    print(
+                        f"[p1_debug] gt_source={gt_source_name} "
+                        f"len_completions={len(completions)} "
+                        f"len_gt={len(gt_source) if gt_source is not None else 0}",
+                        flush=True,
+                    )
+                    self._debug_source_printed = True
+                n = min(self._debug_print_samples, len(completions))
+                for i in range(n):
+                    pred_i = _parse_pred_top3(completions[i])
+                    gt_text_i = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
+                    gt_ids_i = _parse_ids(gt_text_i)[:3]
+                    print(
+                        f"[p1_debug] i={i} pred={pred_i} gt={gt_ids_i} "
+                        f"raw_pred={str(completions[i])[:120]!r} raw_gt={str(gt_text_i)[:120]!r}",
+                        flush=True,
+                    )
 
         return rewards
 

@@ -21,7 +21,6 @@ import atexit
 import concurrent.futures
 import inspect
 import os
-import random
 import time
 import torch
 import torch.distributed as dist
@@ -222,108 +221,6 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         return results
 
-    def _decode_completion_to_text(self, completion: Any) -> str:
-        if isinstance(completion, str):
-            return completion
-        if isinstance(completion, list):
-            try:
-                return self.processing_class.decode(completion)
-            except Exception:
-                return str(completion)
-        if isinstance(completion, dict):
-            token_ids = completion.get('token_ids')
-            if token_ids is not None:
-                try:
-                    return self.processing_class.decode(token_ids)
-                except Exception:
-                    return str(completion)
-        return str(completion)
-
-    @staticmethod
-    def _extract_triplet_from_text(text: str) -> Optional[Tuple[int, int, int]]:
-        import re
-        ids = [int(x) for x in re.findall(r'\d+', str(text or ''))]
-        if len(ids) < 3:
-            return None
-        triplet = tuple(ids[:3])
-        if len(set(triplet)) != 3:
-            return None
-        if any(i < 1 or i > 16 for i in triplet):
-            return None
-        return triplet
-
-    @staticmethod
-    def _set_completion_triplet_inplace(row: Dict[str, Any], triplet: Tuple[int, int, int]) -> None:
-        text = f'{triplet[0]},{triplet[1]},{triplet[2]}'
-        row['messages'][-1]['content'] = text
-        # Drop rollout-time token caches to keep text/token consistency.
-        row.pop('response_token_ids', None)
-        row.pop('response_loss_mask', None)
-
-    def _sample_unseen_triplet(self, seen: set, rng: random.Random,
-                               max_retries: int) -> Tuple[Optional[Tuple[int, int, int]], int]:
-        tries = 0
-        for _ in range(max_retries):
-            tries += 1
-            t = tuple(rng.sample(range(1, 17), 3))
-            if t not in seen:
-                return t, tries
-        return None, tries
-
-    def _dedupe_rollouts_with_resample(self, generated_inputs: DataType) -> DataType:
-        max_retries = self._dedupe_max_retries
-        total_resampled = 0
-        retries_used = 0
-
-        prompt_to_indices = defaultdict(list)
-        for idx, row in enumerate(generated_inputs):
-            prompt_to_indices[row.get('prompt_id', f'idx_{idx}')].append(idx)
-
-        # Stable per-step seed for reproducibility.
-        step_seed = int(getattr(self.state, 'global_step', 0))
-        rng = random.Random(step_seed + 131)
-
-        for _, indices in prompt_to_indices.items():
-            seen = set()
-            for idx in indices:
-                completion = generated_inputs[idx]['messages'][-1]['content']
-                text = self._decode_completion_to_text(completion)
-                triplet = self._extract_triplet_from_text(text)
-
-                is_dup = triplet is not None and triplet in seen
-                is_invalid = triplet is None and self._dedupe_require_valid
-                if is_dup or is_invalid:
-                    candidate, tries = self._sample_unseen_triplet(seen, rng, max_retries=max_retries)
-                    retries_used += tries
-                    if candidate is not None:
-                        self._set_completion_triplet_inplace(generated_inputs[idx], candidate)
-                        seen.add(candidate)
-                        total_resampled += 1
-                    # If no candidate found, keep original output.
-                elif triplet is not None:
-                    seen.add(triplet)
-
-        # Log dedupe diagnostics
-        prompt_to_unique = defaultdict(set)
-        for idx, row in enumerate(generated_inputs):
-            completion = row['messages'][-1]['content']
-            text = self._decode_completion_to_text(completion)
-            triplet = self._extract_triplet_from_text(text)
-            if triplet is not None:
-                prompt_to_unique[row.get('prompt_id', f'idx_{idx}')].add(triplet)
-
-        if prompt_to_unique:
-            unique_counts = [len(v) for v in prompt_to_unique.values()]
-            mean_unique = float(sum(unique_counts) / len(unique_counts))
-        else:
-            mean_unique = 0.0
-
-        mode = 'train' if self.model.training else 'eval'
-        self._metrics[mode]['dedupe/unique_triplets_in_group'].append(mean_unique)
-        self._metrics[mode]['dedupe/retries'].append(float(retries_used))
-        self._metrics[mode]['dedupe/resampled_count'].append(float(total_resampled))
-        return generated_inputs
-
     @profiling_decorator
     def _generate_and_score_completions(self, inputs: DataType) -> DataType:
         # resample for encoding failed data when set truncation_strategy 'delete'
@@ -332,9 +229,6 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         inputs = self._generate_completions(inputs)
         mode = 'train' if self.model.training else 'eval'
-        if mode == 'train' and self._dedupe_rollouts:
-            inputs = self._dedupe_rollouts_with_resample(inputs)
-
         total_rewards_per_func = self._score_completions(inputs)
 
         if self.dynamic_sample and mode == 'train':
@@ -2237,24 +2131,12 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
             'offpolicy_sequence_mask': 'enable' if self.off_policy_sequence_mask_delta is not None else 'disable',
             'rollout_importance_sampling': 'enable' if self.rollout_importance_sampling_mode is not None else 'disable',
             'loss_type': str(self.loss_type),
-            'dedupe_rollouts': str(self._dedupe_rollouts),
-            'dedupe_max_retries': str(self._dedupe_max_retries),
-            'dedupe_require_valid': str(self._dedupe_require_valid),
         }
         return config
 
     def _prepare_algorithm_params(self):
         args = self.args
         self.shuffle_dataset = args.dataset_shuffle
-        # Deprecated trainer-side dedupe (can cause distributed object-gather instability).
-        # Use rollout-side dedupe in RolloutTrainerMixin via GRPO_DEDUPE_* env vars instead.
-        self._dedupe_rollouts = os.getenv('GRPO_TRAINER_DEDUPE_ROLLOUTS', '0').lower() in {
-            '1', 'true', 'yes', 'y', 'on'
-        }
-        self._dedupe_max_retries = max(0, int(os.getenv('GRPO_TRAINER_DEDUPE_MAX_RETRIES', '20')))
-        self._dedupe_require_valid = os.getenv('GRPO_TRAINER_DEDUPE_REQUIRE_VALID', '1').lower() in {
-            '1', 'true', 'yes', 'y', 'on'
-        }
 
         self.loss_type = args.loss_type  # loss normalization
         self.scale_rewards = args.scale_rewards
