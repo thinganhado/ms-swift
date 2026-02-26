@@ -2,6 +2,7 @@
 import base64
 import concurrent.futures
 import inspect
+import itertools
 import json
 import os
 import re
@@ -132,6 +133,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         }
         self.grpo_dedupe_overlap_reject = max(1, int(os.getenv('GRPO_DEDUPE_OVERLAP_REJECT', '2')))
         self.grpo_dedupe_id_cap = max(1, int(os.getenv('GRPO_DEDUPE_ID_CAP', '3')))
+        self.grpo_dedupe_strict = os.getenv('GRPO_DEDUPE_STRICT', '1').lower() in {'1', 'true', 'yes', 'on'}
 
         self.disable_rollout_importance_sampling = False
 
@@ -1031,6 +1033,57 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             return None
         return (ids[0], ids[1], ids[2])
 
+    @staticmethod
+    def _set_triplet_to_messages(messages: List[Dict[str, Any]], triplet: Tuple[int, int, int]) -> None:
+        text = f'{triplet[0]},{triplet[1]},{triplet[2]}'
+        for msg in reversed(messages):
+            if msg.get('role') != 'assistant':
+                continue
+            content = msg.get('content')
+            if isinstance(content, str):
+                msg['content'] = text
+                return
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        part['text'] = text
+                        return
+                content.append({'type': 'text', 'text': text})
+                return
+        messages.append({'role': 'assistant', 'content': text})
+
+    @staticmethod
+    def _select_repair_triplet(
+        accepted_triplets: List[Tuple[int, int, int]],
+        id_counts: Dict[int, int],
+        overlap_reject: int,
+        id_cap: int,
+    ) -> Optional[Tuple[int, int, int]]:
+        def _violates(candidate: Tuple[int, int, int]) -> bool:
+            cset = set(candidate)
+            for prev in accepted_triplets:
+                if len(cset & set(prev)) >= overlap_reject:
+                    return True
+            for rid in candidate:
+                if id_counts.get(rid, 0) + 1 > id_cap:
+                    return True
+            return False
+
+        all_ids = list(range(1, 17))
+        # Prefer under-used IDs first.
+        all_ids.sort(key=lambda rid: (id_counts.get(rid, 0), rid))
+        best = None
+        best_score = None
+        for combo in itertools.combinations(all_ids, 3):
+            cand = (combo[0], combo[1], combo[2])
+            if _violates(cand):
+                continue
+            score = sum(id_counts.get(x, 0) for x in cand)
+            if best is None or score < best_score:
+                best = cand
+                best_score = score
+        return best
+
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
         if not inputs:
@@ -1235,6 +1288,8 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
 
             total_retried = 0
             total_replaced = 0
+            total_forced_repairs = 0
+            total_strict_failures = 0
             for _, idxs in grouped_indices.items():
                 accepted_triplets: List[Tuple[int, int, int]] = []
                 id_counts: Dict[int, int] = {}
@@ -1299,14 +1354,32 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         break
 
                     if not replaced:
-                        # Keep original sample when retry budget is exhausted.
-                        _accept_triplet(self._extract_triplet_from_messages(merged[idx].get('messages', [])))
+                        if self.grpo_dedupe_strict:
+                            repaired = self._select_repair_triplet(
+                                accepted_triplets=accepted_triplets,
+                                id_counts=id_counts,
+                                overlap_reject=self.grpo_dedupe_overlap_reject,
+                                id_cap=self.grpo_dedupe_id_cap,
+                            )
+                            if repaired is not None:
+                                self._set_triplet_to_messages(merged[idx]['messages'], repaired)
+                                _accept_triplet(repaired)
+                                total_forced_repairs += 1
+                            else:
+                                # Constraint set is infeasible for this point; fallback to original.
+                                _accept_triplet(self._extract_triplet_from_messages(merged[idx].get('messages', [])))
+                                total_strict_failures += 1
+                        else:
+                            # Keep original sample when retry budget is exhausted.
+                            _accept_triplet(self._extract_triplet_from_messages(merged[idx].get('messages', [])))
 
             if total_retried > 0:
                 logger.info(
                     f'Local rollout dedupe: retries={total_retried}, replaced={total_replaced}, '
                     f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}, '
-                    f'overlap_reject={self.grpo_dedupe_overlap_reject}, id_cap={self.grpo_dedupe_id_cap}')
+                    f'overlap_reject={self.grpo_dedupe_overlap_reject}, id_cap={self.grpo_dedupe_id_cap}, '
+                    f'strict={self.grpo_dedupe_strict}, forced_repairs={total_forced_repairs}, '
+                    f'strict_failures={total_strict_failures}')
             return merged
 
         global_inputs = gather_object(inputs)
