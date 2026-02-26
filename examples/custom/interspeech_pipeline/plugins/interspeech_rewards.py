@@ -98,7 +98,7 @@ class InterspeechPrompt1Reward(ORM):
 
     W_NDCG = 1.0
     W_FORMAT = 0.1
-    W_DIST = 0.1
+    W_DIST = 0.0
 
     def __init__(self):
         super().__init__()
