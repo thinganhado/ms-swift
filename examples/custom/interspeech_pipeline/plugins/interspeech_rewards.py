@@ -64,23 +64,39 @@ class InterspeechPrompt1Reward(ORM):
         self._debug_source_printed = False
 
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
-        gt_source = gt_regions if gt_regions is not None else assistant
-        gt_source_name = "gt_regions" if gt_regions is not None else "assistant"
-        if gt_source is None:
-            # Extra fallback for datasets that keep label in `solution`.
-            gt_source = kwargs.get("solution")
-            gt_source_name = "solution" if gt_source is not None else gt_source_name
+        # Robust per-sample fallback chain:
+        # gt_regions -> assistant -> solution -> sft_top3
+        solution = kwargs.get("solution")
+
+        def _pick_gt(i: int):
+            candidates = [
+                ("gt_regions", gt_regions),
+                ("assistant", assistant),
+                ("solution", solution),
+                ("sft_top3", sft_top3),
+            ]
+            for name, src in candidates:
+                if src is None:
+                    continue
+                if i >= len(src):
+                    continue
+                text = str(src[i] if src[i] is not None else "").strip()
+                if text:
+                    return text, name
+            return "", "none"
 
         rewards: List[float] = []
         valid_count = 0
         ndcg_sum_valid = 0.0
         overlap_sum_valid = 0.0
         valid_triplets: List[tuple] = []
+        used_source_counts = {"gt_regions": 0, "assistant": 0, "solution": 0, "sft_top3": 0, "none": 0}
         for i, completion in enumerate(completions):
             pred = _parse_pred_top3(completion)
             fmt = 1.0 if pred is not None else 0.0
 
-            gt_text = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
+            gt_text, used_source = _pick_gt(i)
+            used_source_counts[used_source] += 1
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
             if pred is not None:
@@ -134,19 +150,22 @@ class InterspeechPrompt1Reward(ORM):
             if self._debug_reward:
                 if not self._debug_source_printed:
                     print(
-                        f"[p1_debug] gt_source={gt_source_name} "
+                        f"[p1_debug] gt_source_counts={used_source_counts} "
                         f"len_completions={len(completions)} "
-                        f"len_gt={len(gt_source) if gt_source is not None else 0}",
+                        f"len_gt_regions={len(gt_regions) if gt_regions is not None else 0} "
+                        f"len_assistant={len(assistant) if assistant is not None else 0} "
+                        f"len_solution={len(solution) if solution is not None else 0} "
+                        f"len_sft_top3={len(sft_top3) if sft_top3 is not None else 0}",
                         flush=True,
                     )
                     self._debug_source_printed = True
                 n = min(self._debug_print_samples, len(completions))
                 for i in range(n):
                     pred_i = _parse_pred_top3(completions[i])
-                    gt_text_i = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
+                    gt_text_i, used_source_i = _pick_gt(i)
                     gt_ids_i = _parse_ids(gt_text_i)[:3]
                     print(
-                        f"[p1_debug] i={i} pred={pred_i} gt={gt_ids_i} "
+                        f"[p1_debug] i={i} src={used_source_i} pred={pred_i} gt={gt_ids_i} "
                         f"raw_pred={str(completions[i])[:120]!r} raw_gt={str(gt_text_i)[:120]!r}",
                         flush=True,
                     )
