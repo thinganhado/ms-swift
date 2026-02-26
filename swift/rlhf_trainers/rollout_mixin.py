@@ -1026,7 +1026,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                 break
         if not assistant_text:
             return None
-        ids = [int(x) for x in re.findall(r'\d+', str(assistant_text))]
+        s = str(assistant_text).strip()
+        # Keep validity strict and aligned with reward parser: no free-form prose accepted.
+        if not re.fullmatch(r'\[?\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]?', s):
+            return None
+        ids = [int(x) for x in re.findall(r'\d+', s)]
         if len(ids) != 3 or len(set(ids)) != 3:
             return None
         if any(i < 1 or i > 16 for i in ids):

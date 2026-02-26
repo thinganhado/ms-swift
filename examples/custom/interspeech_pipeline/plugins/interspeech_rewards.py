@@ -12,10 +12,11 @@ def _parse_ids(text: str) -> List[int]:
 
 
 def _parse_pred_top3(text: str) -> Optional[List[int]]:
-    ids = _parse_ids(text)
-    if len(ids) < 3:
+    s = str(text or "").strip()
+    # Strict output format only: allow optional [] wrapper, otherwise digits+commas+spaces only.
+    if not re.fullmatch(r"\[?\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]?", s):
         return None
-    ids = ids[:3]
+    ids = [int(x) for x in re.findall(r"\d+", s)]
     if len(set(ids)) != 3:
         return None
     if any(i < 1 or i > 16 for i in ids):
@@ -99,8 +100,9 @@ class InterspeechPrompt1Reward(ORM):
     """
 
     W_NDCG = 1.0
+    W_HIT = 0.3
     W_FORMAT = 0.1
-    W_DIST = 0.2
+    W_DIST = 0.1
     W_EXACT = 0.0
 
     def __init__(self):
@@ -164,6 +166,7 @@ class InterspeechPrompt1Reward(ORM):
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
             dist_sim = _grid_dist_similarity(pred, gt_ids) if pred is not None and gt_ids else 0.0
+            hit = (len(set(pred) & set(gt_ids[:3])) / 3.0) if (pred is not None and gt_ids) else 0.0
             exact = 1.0 if (pred is not None and gt_ids and tuple(pred) == tuple(gt_ids[:3])) else 0.0
             if pred is not None:
                 valid_count += 1
@@ -174,7 +177,8 @@ class InterspeechPrompt1Reward(ORM):
                 overlap_sum_valid += len(set(pred) & gt_set_for_overlap) / 3.0
                 valid_triplets.append(tuple(pred))
 
-            rewards.append(self.W_NDCG * ndcg + self.W_DIST * dist_sim + self.W_FORMAT * fmt + self.W_EXACT * exact)
+            rewards.append(self.W_NDCG * ndcg + self.W_HIT * hit + self.W_DIST * dist_sim +
+                           self.W_FORMAT * fmt + self.W_EXACT * exact)
 
         # Step-level diagnostics (rank-0 only).
         trainer_state = kwargs.get("trainer_state", None)
