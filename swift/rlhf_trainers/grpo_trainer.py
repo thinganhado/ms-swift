@@ -221,15 +221,109 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         return results
 
+    def _decode_completion_to_text(self, completion: Any) -> str:
+        if isinstance(completion, str):
+            return completion
+        if isinstance(completion, list):
+            try:
+                return self.processing_class.decode(completion)
+            except Exception:
+                return str(completion)
+        if isinstance(completion, dict):
+            token_ids = completion.get('token_ids')
+            if token_ids is not None:
+                try:
+                    return self.processing_class.decode(token_ids)
+                except Exception:
+                    return str(completion)
+        return str(completion)
+
+    @staticmethod
+    def _extract_triplet_from_text(text: str) -> Optional[Tuple[int, int, int]]:
+        import re
+        ids = [int(x) for x in re.findall(r'\d+', str(text or ''))]
+        if len(ids) < 3:
+            return None
+        triplet = tuple(ids[:3])
+        if len(set(triplet)) != 3:
+            return None
+        if any(i < 1 or i > 16 for i in triplet):
+            return None
+        return triplet
+
+    def _dedupe_rollouts_with_resample(self, generated_inputs: DataType, seed_inputs: DataType) -> DataType:
+        max_retries = self._dedupe_max_retries
+        retries = 0
+        total_resampled = 0
+
+        while retries < max_retries:
+            prompt_to_indices = defaultdict(list)
+            for idx, row in enumerate(generated_inputs):
+                prompt_to_indices[row.get('prompt_id', f'idx_{idx}')].append(idx)
+
+            to_resample = []
+            for _, indices in prompt_to_indices.items():
+                seen = set()
+                for idx in indices:
+                    completion = generated_inputs[idx]['messages'][-1]['content']
+                    text = self._decode_completion_to_text(completion)
+                    triplet = self._extract_triplet_from_text(text)
+                    should_resample = (
+                        (triplet is None and self._dedupe_require_valid)
+                        or (triplet is not None and triplet in seen)
+                    )
+                    if should_resample:
+                        to_resample.append(idx)
+                    elif triplet is not None:
+                        seen.add(triplet)
+
+            if not to_resample:
+                break
+
+            subset_seed = [deepcopy(seed_inputs[i]) for i in to_resample]
+            regenerated_subset = self._generate_completions(subset_seed)
+            for local_i, global_i in enumerate(to_resample):
+                regenerated_subset[local_i]['prompt_id'] = generated_inputs[global_i].get(
+                    'prompt_id', seed_inputs[global_i].get('prompt_id'))
+                generated_inputs[global_i] = regenerated_subset[local_i]
+
+            retries += 1
+            total_resampled += len(to_resample)
+
+        # Log dedupe diagnostics
+        prompt_to_unique = defaultdict(set)
+        for idx, row in enumerate(generated_inputs):
+            completion = row['messages'][-1]['content']
+            text = self._decode_completion_to_text(completion)
+            triplet = self._extract_triplet_from_text(text)
+            if triplet is not None:
+                prompt_to_unique[row.get('prompt_id', f'idx_{idx}')].add(triplet)
+
+        if prompt_to_unique:
+            unique_counts = [len(v) for v in prompt_to_unique.values()]
+            mean_unique = float(sum(unique_counts) / len(unique_counts))
+        else:
+            mean_unique = 0.0
+
+        mode = 'train' if self.model.training else 'eval'
+        self._metrics[mode]['dedupe/unique_triplets_in_group'].append(mean_unique)
+        self._metrics[mode]['dedupe/retries'].append(float(retries))
+        self._metrics[mode]['dedupe/resampled_count'].append(float(total_resampled))
+        return generated_inputs
+
     @profiling_decorator
     def _generate_and_score_completions(self, inputs: DataType) -> DataType:
         # resample for encoding failed data when set truncation_strategy 'delete'
         if self.template.truncation_strategy == 'raise':
             inputs = self.resample_encode_failed_inputs(inputs)
 
+        seed_inputs = deepcopy(inputs)
         inputs = self._generate_completions(inputs)
-        total_rewards_per_func = self._score_completions(inputs)
         mode = 'train' if self.model.training else 'eval'
+        if mode == 'train' and self._dedupe_rollouts:
+            inputs = self._dedupe_rollouts_with_resample(inputs, seed_inputs)
+
+        total_rewards_per_func = self._score_completions(inputs)
 
         if self.dynamic_sample and mode == 'train':
             # dynamic sampling for std=0 groups
@@ -2131,12 +2225,20 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
             'offpolicy_sequence_mask': 'enable' if self.off_policy_sequence_mask_delta is not None else 'disable',
             'rollout_importance_sampling': 'enable' if self.rollout_importance_sampling_mode is not None else 'disable',
             'loss_type': str(self.loss_type),
+            'dedupe_rollouts': str(self._dedupe_rollouts),
+            'dedupe_max_retries': str(self._dedupe_max_retries),
+            'dedupe_require_valid': str(self._dedupe_require_valid),
         }
         return config
 
     def _prepare_algorithm_params(self):
         args = self.args
         self.shuffle_dataset = args.dataset_shuffle
+        self._dedupe_rollouts = os.getenv('GRPO_DEDUPE_ROLLOUTS', '1').lower() in {'1', 'true', 'yes', 'y', 'on'}
+        self._dedupe_max_retries = max(0, int(os.getenv('GRPO_DEDUPE_MAX_RETRIES', '20')))
+        self._dedupe_require_valid = os.getenv('GRPO_DEDUPE_REQUIRE_VALID', '1').lower() in {
+            '1', 'true', 'yes', 'y', 'on'
+        }
 
         self.loss_type = args.loss_type  # loss normalization
         self.scale_rewards = args.scale_rewards

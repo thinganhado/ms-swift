@@ -34,6 +34,11 @@ NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-2}"
 RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 AUTO_MERGE_AFTER_TRAIN="${AUTO_MERGE_AFTER_TRAIN:-1}"
 MERGE_SOURCE="${MERGE_SOURCE:-best}" # best | last
+TEMPERATURE="${TEMPERATURE:-1.3}"
+TOP_P="${TOP_P:-0.95}"
+GRPO_DEDUPE_ROLLOUTS="${GRPO_DEDUPE_ROLLOUTS:-1}"
+GRPO_DEDUPE_MAX_RETRIES="${GRPO_DEDUPE_MAX_RETRIES:-20}"
+GRPO_DEDUPE_REQUIRE_VALID="${GRPO_DEDUPE_REQUIRE_VALID:-1}"
 
 # Optional positional override: first arg as MODEL_ID
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
@@ -73,6 +78,9 @@ export FLASHINFER_WORKSPACE_BASE="${CACHE_ROOT}"
 export FLASHINFER_WORKSPACE_DIR="${CACHE_ROOT}/flashinfer"
 export FLASHINFER_JIT_CACHE_DIR="${FLASHINFER_WORKSPACE_DIR}"
 export TMPDIR="${TMPDIR_BASE}"
+export GRPO_DEDUPE_ROLLOUTS
+export GRPO_DEDUPE_MAX_RETRIES
+export GRPO_DEDUPE_REQUIRE_VALID
 
 # ===== Train GRPO-1 =====
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
@@ -92,7 +100,8 @@ swift rlhf \
   --sleep_level "${SLEEP_LEVEL}" \
   --beta 0.01 \
   --num_generations 8 \
-  --temperature 1.1 \
+  --temperature "${TEMPERATURE}" \
+  --top_p "${TOP_P}" \
   --tuner_type lora \
   --lora_rank 8 \
   --lora_alpha 32 \
