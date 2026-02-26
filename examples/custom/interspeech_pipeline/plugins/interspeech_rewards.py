@@ -21,6 +21,28 @@ def _parse_pred_top3(text: str) -> Optional[List[int]]:
     return ids
 
 
+def _extract_assistant_text_from_messages(messages) -> str:
+    if not isinstance(messages, list):
+        return ""
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+            if text:
+                return text
+        if isinstance(content, list):
+            chunks = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    chunks.append(str(part.get("text", "")))
+            text = "".join(chunks).strip()
+            if text:
+                return text
+    return ""
+
+
 def _ndcg_at_3(pred: Sequence[int], gt: Sequence[int]) -> float:
     rel_by_id: Dict[int, int] = {}
     for rank, rid in enumerate(gt[:3]):
@@ -63,7 +85,7 @@ class InterspeechPrompt1Reward(ORM):
         self._debug_print_samples = max(1, int(os.getenv("INTERSPEECH_DEBUG_SAMPLES", "8")))
         self._debug_source_printed = False
 
-    def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
+    def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, messages=None, **kwargs) -> List[float]:
         # Robust per-sample fallback chain:
         # gt_regions -> assistant -> solution -> sft_top3
         solution = kwargs.get("solution")
@@ -83,6 +105,11 @@ class InterspeechPrompt1Reward(ORM):
                 text = str(src[i] if src[i] is not None else "").strip()
                 if text:
                     return text, name
+            # SFT-style fallback: extract assistant GT directly from messages.
+            if messages is not None and i < len(messages):
+                msg_text = _extract_assistant_text_from_messages(messages[i])
+                if msg_text:
+                    return msg_text, "messages.assistant"
             return "", "none"
 
         rewards: List[float] = []
@@ -90,7 +117,14 @@ class InterspeechPrompt1Reward(ORM):
         ndcg_sum_valid = 0.0
         overlap_sum_valid = 0.0
         valid_triplets: List[tuple] = []
-        used_source_counts = {"gt_regions": 0, "assistant": 0, "solution": 0, "sft_top3": 0, "none": 0}
+        used_source_counts = {
+            "gt_regions": 0,
+            "assistant": 0,
+            "solution": 0,
+            "sft_top3": 0,
+            "messages.assistant": 0,
+            "none": 0,
+        }
         for i, completion in enumerate(completions):
             pred = _parse_pred_top3(completion)
             fmt = 1.0 if pred is not None else 0.0

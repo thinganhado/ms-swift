@@ -958,11 +958,15 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         """Preprocess inputs before inference"""
         processed_inputs = self._add_prompt_id_to_inputs(inputs)
         for input_item in processed_inputs:
-            if (not input_item.get('gt_regions')) and input_item.get('messages'):
-                # Preserve prompt-1 GT before remove_response strips assistant target from SFT-style datasets.
+            if input_item.get('messages'):
+                # Preserve SFT-style assistant target before remove_response strips it.
                 gt_from_msgs = self._extract_gt_regions_from_messages(input_item['messages'])
                 if gt_from_msgs:
-                    input_item['gt_regions'] = gt_from_msgs
+                    if not input_item.get('gt_regions'):
+                        input_item['gt_regions'] = gt_from_msgs
+                    # Keep an assistant text fallback for reward funcs expecting this field.
+                    if not input_item.get('assistant'):
+                        input_item['assistant'] = gt_from_msgs
             remove_response(input_item['messages'])
         return processed_inputs
 
