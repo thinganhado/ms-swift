@@ -21,6 +21,7 @@ import atexit
 import concurrent.futures
 import inspect
 import os
+import random
 import time
 import torch
 import torch.distributed as dist
@@ -251,44 +252,56 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
             return None
         return triplet
 
-    def _dedupe_rollouts_with_resample(self, generated_inputs: DataType, seed_inputs: DataType) -> DataType:
+    @staticmethod
+    def _set_completion_triplet_inplace(row: Dict[str, Any], triplet: Tuple[int, int, int]) -> None:
+        text = f'{triplet[0]},{triplet[1]},{triplet[2]}'
+        row['messages'][-1]['content'] = text
+        # Drop rollout-time token caches to keep text/token consistency.
+        row.pop('response_token_ids', None)
+        row.pop('response_loss_mask', None)
+
+    def _sample_unseen_triplet(self, seen: set, rng: random.Random,
+                               max_retries: int) -> Tuple[Optional[Tuple[int, int, int]], int]:
+        tries = 0
+        for _ in range(max_retries):
+            tries += 1
+            t = tuple(rng.sample(range(1, 17), 3))
+            if t not in seen:
+                return t, tries
+        return None, tries
+
+    def _dedupe_rollouts_with_resample(self, generated_inputs: DataType) -> DataType:
         max_retries = self._dedupe_max_retries
-        retries = 0
         total_resampled = 0
+        retries_used = 0
 
-        while retries < max_retries:
-            prompt_to_indices = defaultdict(list)
-            for idx, row in enumerate(generated_inputs):
-                prompt_to_indices[row.get('prompt_id', f'idx_{idx}')].append(idx)
+        prompt_to_indices = defaultdict(list)
+        for idx, row in enumerate(generated_inputs):
+            prompt_to_indices[row.get('prompt_id', f'idx_{idx}')].append(idx)
 
-            to_resample = []
-            for _, indices in prompt_to_indices.items():
-                seen = set()
-                for idx in indices:
-                    completion = generated_inputs[idx]['messages'][-1]['content']
-                    text = self._decode_completion_to_text(completion)
-                    triplet = self._extract_triplet_from_text(text)
-                    should_resample = (
-                        (triplet is None and self._dedupe_require_valid)
-                        or (triplet is not None and triplet in seen)
-                    )
-                    if should_resample:
-                        to_resample.append(idx)
-                    elif triplet is not None:
-                        seen.add(triplet)
+        # Stable per-step seed for reproducibility.
+        step_seed = int(getattr(self.state, 'global_step', 0))
+        rng = random.Random(step_seed + 131)
 
-            if not to_resample:
-                break
+        for _, indices in prompt_to_indices.items():
+            seen = set()
+            for idx in indices:
+                completion = generated_inputs[idx]['messages'][-1]['content']
+                text = self._decode_completion_to_text(completion)
+                triplet = self._extract_triplet_from_text(text)
 
-            subset_seed = [deepcopy(seed_inputs[i]) for i in to_resample]
-            regenerated_subset = self._generate_completions(subset_seed)
-            for local_i, global_i in enumerate(to_resample):
-                regenerated_subset[local_i]['prompt_id'] = generated_inputs[global_i].get(
-                    'prompt_id', seed_inputs[global_i].get('prompt_id'))
-                generated_inputs[global_i] = regenerated_subset[local_i]
-
-            retries += 1
-            total_resampled += len(to_resample)
+                is_dup = triplet is not None and triplet in seen
+                is_invalid = triplet is None and self._dedupe_require_valid
+                if is_dup or is_invalid:
+                    candidate, tries = self._sample_unseen_triplet(seen, rng, max_retries=max_retries)
+                    retries_used += tries
+                    if candidate is not None:
+                        self._set_completion_triplet_inplace(generated_inputs[idx], candidate)
+                        seen.add(candidate)
+                        total_resampled += 1
+                    # If no candidate found, keep original output.
+                elif triplet is not None:
+                    seen.add(triplet)
 
         # Log dedupe diagnostics
         prompt_to_unique = defaultdict(set)
@@ -307,7 +320,7 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
 
         mode = 'train' if self.model.training else 'eval'
         self._metrics[mode]['dedupe/unique_triplets_in_group'].append(mean_unique)
-        self._metrics[mode]['dedupe/retries'].append(float(retries))
+        self._metrics[mode]['dedupe/retries'].append(float(retries_used))
         self._metrics[mode]['dedupe/resampled_count'].append(float(total_resampled))
         return generated_inputs
 
@@ -317,11 +330,10 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
         if self.template.truncation_strategy == 'raise':
             inputs = self.resample_encode_failed_inputs(inputs)
 
-        seed_inputs = deepcopy(inputs)
         inputs = self._generate_completions(inputs)
         mode = 'train' if self.model.training else 'eval'
         if mode == 'train' and self._dedupe_rollouts:
-            inputs = self._dedupe_rollouts_with_resample(inputs, seed_inputs)
+            inputs = self._dedupe_rollouts_with_resample(inputs)
 
         total_rewards_per_func = self._score_completions(inputs)
 
