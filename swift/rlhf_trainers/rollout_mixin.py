@@ -4,6 +4,7 @@ import concurrent.futures
 import inspect
 import json
 import os
+import random
 import re
 import time
 import torch
@@ -107,6 +108,13 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         if hasattr(args, 'completion_length_limit_scope'):  # GRPO colocate
             self.completion_length_limit_scope = args.completion_length_limit_scope
         self.async_generate = args.async_generate
+        self.rollout_dedupe_enabled = os.getenv('GRPO_DEDUPE_ROLLOUTS', '0').lower() in {
+            '1', 'true', 'yes', 'y', 'on'
+        }
+        self.rollout_dedupe_max_retries = max(0, int(os.getenv('GRPO_DEDUPE_MAX_RETRIES', '5')))
+        self.rollout_dedupe_require_valid = os.getenv('GRPO_DEDUPE_REQUIRE_VALID', '0').lower() in {
+            '1', 'true', 'yes', 'y', 'on'
+        }
 
         # Enable logprobs for vLLM importance sampling if requested
         structured_outputs_regex = getattr(args, 'structured_outputs_regex', None)
@@ -1147,9 +1155,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             if self.async_generate and not outputs:
                 return outputs
             assert len(inputs) == len(outputs)
-            return [
+            merged = [
                 merge_output_input_data(deepcopy(input_data), output) for input_data, output in zip(inputs, outputs)
             ]
+            return self._apply_rollout_triplet_dedupe(merged)
 
         global_inputs = gather_object(inputs)
         results = []
@@ -1164,7 +1173,68 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             input_data = deepcopy(id2inputs[request_id])
             results.append(merge_output_input_data(input_data, output))
 
-        return results
+        return self._apply_rollout_triplet_dedupe(results)
+
+    @staticmethod
+    def _parse_top3_triplet(text: str) -> Optional[tuple]:
+        ids = [int(x) for x in re.findall(r'\d+', str(text or ''))]
+        if len(ids) < 3:
+            return None
+        t = tuple(ids[:3])
+        if len(set(t)) != 3:
+            return None
+        if any(i < 1 or i > 16 for i in t):
+            return None
+        return t
+
+    @staticmethod
+    def _set_triplet_text_inplace(row: Dict[str, Any], triplet: tuple) -> None:
+        row['messages'][-1]['content'] = f'{triplet[0]},{triplet[1]},{triplet[2]}'
+        row.pop('response_token_ids', None)
+        row.pop('response_loss_mask', None)
+        row.pop('rollout_logprobs', None)
+
+    def _apply_rollout_triplet_dedupe(self, rows: DataType) -> DataType:
+        if not self.rollout_dedupe_enabled or not rows:
+            return rows
+
+        rng = random.Random(int(getattr(self.state, 'global_step', 0)) + 911)
+        groups = OrderedDict()
+        for i, row in enumerate(rows):
+            pid = row.get('prompt_id', f'idx_{i}')
+            groups.setdefault(pid, []).append(i)
+
+        replaced = 0
+        unique_counts = []
+        for _, idxs in groups.items():
+            seen = set()
+            for idx in idxs:
+                text = str(rows[idx]['messages'][-1].get('content', ''))
+                triplet = self._parse_top3_triplet(text)
+                need_replace = ((triplet is None and self.rollout_dedupe_require_valid) or
+                                (triplet is not None and triplet in seen))
+                if need_replace:
+                    new_triplet = None
+                    for _ in range(self.rollout_dedupe_max_retries):
+                        cand = tuple(rng.sample(range(1, 17), 3))
+                        if cand not in seen:
+                            new_triplet = cand
+                            break
+                    if new_triplet is not None:
+                        self._set_triplet_text_inplace(rows[idx], new_triplet)
+                        seen.add(new_triplet)
+                        replaced += 1
+                elif triplet is not None:
+                    seen.add(triplet)
+            unique_counts.append(len(seen))
+
+        mode = 'train' if self.model.training else 'eval'
+        if hasattr(self, '_metrics'):
+            if unique_counts:
+                self._metrics[mode]['dedupe/unique_triplets_in_group'].append(float(sum(unique_counts) / len(unique_counts)))
+            self._metrics[mode]['dedupe/replaced_in_rollout'].append(float(replaced))
+
+        return rows
 
     @torch.no_grad()
     def offload_model(self, model):

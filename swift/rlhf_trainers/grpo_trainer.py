@@ -2246,9 +2246,13 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
     def _prepare_algorithm_params(self):
         args = self.args
         self.shuffle_dataset = args.dataset_shuffle
-        self._dedupe_rollouts = os.getenv('GRPO_DEDUPE_ROLLOUTS', '1').lower() in {'1', 'true', 'yes', 'y', 'on'}
-        self._dedupe_max_retries = max(0, int(os.getenv('GRPO_DEDUPE_MAX_RETRIES', '20')))
-        self._dedupe_require_valid = os.getenv('GRPO_DEDUPE_REQUIRE_VALID', '1').lower() in {
+        # Deprecated trainer-side dedupe (can cause distributed object-gather instability).
+        # Use rollout-side dedupe in RolloutTrainerMixin via GRPO_DEDUPE_* env vars instead.
+        self._dedupe_rollouts = os.getenv('GRPO_TRAINER_DEDUPE_ROLLOUTS', '0').lower() in {
+            '1', 'true', 'yes', 'y', 'on'
+        }
+        self._dedupe_max_retries = max(0, int(os.getenv('GRPO_TRAINER_DEDUPE_MAX_RETRIES', '20')))
+        self._dedupe_require_valid = os.getenv('GRPO_TRAINER_DEDUPE_REQUIRE_VALID', '1').lower() in {
             '1', 'true', 'yes', 'y', 'on'
         }
 
