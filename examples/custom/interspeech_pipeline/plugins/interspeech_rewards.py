@@ -96,11 +96,12 @@ def _grid_dist_similarity(pred: Sequence[int], gt: Sequence[int]) -> float:
 class InterspeechPrompt1Reward(ORM):
     """
     Prompt-1 reward:
-      R = 1.0 * nDCG@3 + 0.1 * format
+      R = 1.0 * nDCG@3 + 0.3 * hit + 0.1 * dist_sim + 0.1 * format
     """
 
-    W_NDCG = 0.3
-    W_HIT = 1.0
+    W_NDCG = 1.0
+    W_HIT = 0.3
+    W_DIST = 0.1
     W_FORMAT = 0.1
 
     def __init__(self):
@@ -163,6 +164,7 @@ class InterspeechPrompt1Reward(ORM):
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
             hit = (len(set(pred) & set(gt_ids[:3])) / 3.0) if (pred is not None and gt_ids) else 0.0
+            dist = _grid_dist_similarity(pred, gt_ids[:3]) if (pred is not None and gt_ids) else 0.0
             if pred is not None:
                 valid_count += 1
                 ndcg_sum_valid += ndcg
@@ -171,7 +173,7 @@ class InterspeechPrompt1Reward(ORM):
                 overlap_sum_valid += len(set(pred) & gt_set_for_overlap) / 3.0
                 valid_triplets.append(tuple(pred))
 
-            rewards.append(self.W_NDCG * ndcg + self.W_HIT * hit + self.W_FORMAT * fmt)
+            rewards.append(self.W_NDCG * ndcg + self.W_HIT * hit + self.W_DIST * dist + self.W_FORMAT * fmt)
 
         # Step-level diagnostics (rank-0 only).
         trainer_state = kwargs.get("trainer_state", None)
