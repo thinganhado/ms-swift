@@ -66,6 +66,30 @@ def _ndcg_at_3(pred: Sequence[int], gt: Sequence[int]) -> float:
     return dcg / idcg
 
 
+def _grid_dist_similarity(pred: Sequence[int], gt: Sequence[int]) -> float:
+    if not pred or not gt:
+        return 0.0
+
+    def _to_rc(idx: int):
+        x = int(idx) - 1
+        return (x // 4, x % 4)
+
+    gt_rc = [_to_rc(i) for i in gt if 1 <= int(i) <= 16]
+    if not gt_rc:
+        return 0.0
+
+    sims = []
+    for p in pred:
+        if not (1 <= int(p) <= 16):
+            continue
+        pr, pc = _to_rc(int(p))
+        min_dist = min(abs(pr - gr) + abs(pc - gc) for gr, gc in gt_rc)
+        sims.append(1.0 / (1.0 + float(min_dist)))
+    if not sims:
+        return 0.0
+    return sum(sims) / len(sims)
+
+
 class InterspeechPrompt1Reward(ORM):
     """
     Prompt-1 reward:
@@ -74,6 +98,7 @@ class InterspeechPrompt1Reward(ORM):
 
     W_NDCG = 1.0
     W_FORMAT = 0.1
+    W_DIST = 0.1
 
     def __init__(self):
         super().__init__()
@@ -116,6 +141,7 @@ class InterspeechPrompt1Reward(ORM):
         valid_count = 0
         ndcg_sum_valid = 0.0
         overlap_sum_valid = 0.0
+        dist_sum_valid = 0.0
         valid_triplets: List[tuple] = []
         used_source_counts = {
             "gt_regions": 0,
@@ -133,14 +159,16 @@ class InterspeechPrompt1Reward(ORM):
             used_source_counts[used_source] += 1
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
+            dist_sim = _grid_dist_similarity(pred, gt_ids) if pred is not None and gt_ids else 0.0
             if pred is not None:
                 valid_count += 1
                 ndcg_sum_valid += ndcg
+                dist_sum_valid += dist_sim
                 gt_set_for_overlap = set(gt_ids[:3]) if gt_ids else set()
                 overlap_sum_valid += len(set(pred) & gt_set_for_overlap) / 3.0
                 valid_triplets.append(tuple(pred))
 
-            rewards.append(self.W_NDCG * ndcg + self.W_FORMAT * fmt)
+            rewards.append(self.W_NDCG * ndcg + self.W_DIST * dist_sim + self.W_FORMAT * fmt)
 
         # Step-level diagnostics (rank-0 only).
         trainer_state = kwargs.get("trainer_state", None)
@@ -155,6 +183,7 @@ class InterspeechPrompt1Reward(ORM):
             total_n = max(1, len(completions))
             valid_rate = 100.0 * valid_count / total_n
             mean_ndcg_valid = (ndcg_sum_valid / valid_count) if valid_count > 0 else 0.0
+            mean_dist_valid = (dist_sum_valid / valid_count) if valid_count > 0 else 0.0
             mean_overlap_valid = (overlap_sum_valid / valid_count) if valid_count > 0 else 0.0
             unique_list_rate = (
                 100.0 * len(set(valid_triplets)) / len(valid_triplets)
@@ -176,6 +205,7 @@ class InterspeechPrompt1Reward(ORM):
                 f"[p1_metrics] step={global_step} "
                 f"valid_format_rate={valid_rate:.2f}% "
                 f"mean_ndcg3_valid={mean_ndcg_valid:.4f} "
+                f"mean_grid_dist_sim_valid={mean_dist_valid:.4f} "
                 f"mean_set_overlap_valid={mean_overlap_valid:.4f} "
                 f"reward_var_within_group={reward_var_within_group:.6f} "
                 f"unique_list_rate={unique_list_rate:.2f}%",
