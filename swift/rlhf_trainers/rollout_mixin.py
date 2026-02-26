@@ -23,7 +23,7 @@ from torch.nn import ModuleList
 from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, TrainerCallback
 from types import MethodType
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from swift.infer_engine import RequestConfig
 from swift.infer_engine.protocol import ChatCompletionResponse, RolloutInferRequest, RolloutOutput
@@ -122,6 +122,14 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             return_details=True,
             logprobs=args.use_vllm,
             structured_outputs_regex=structured_outputs_regex)
+
+        # Local (per-rank) rollout dedupe to increase within-group diversity
+        # without cross-rank object gathering (avoids all_gather_object OOMs).
+        self.grpo_dedupe_rollouts = os.getenv('GRPO_DEDUPE_ROLLOUTS', '0').lower() in {'1', 'true', 'yes', 'on'}
+        self.grpo_dedupe_max_retries = max(0, int(os.getenv('GRPO_DEDUPE_MAX_RETRIES', '0')))
+        self.grpo_dedupe_require_valid = os.getenv('GRPO_DEDUPE_REQUIRE_VALID', '0').lower() in {
+            '1', 'true', 'yes', 'on'
+        }
 
         self.disable_rollout_importance_sampling = False
 
@@ -992,6 +1000,35 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     return text
         return None
 
+    @staticmethod
+    def _extract_triplet_from_messages(messages: List[Dict[str, Any]]) -> Optional[Tuple[int, int, int]]:
+        """Parse top-3 unique region ids (1..16) from the latest assistant text."""
+        if not messages:
+            return None
+        assistant_text = ''
+        for msg in reversed(messages):
+            if msg.get('role') != 'assistant':
+                continue
+            content = msg.get('content')
+            if isinstance(content, str):
+                assistant_text = content
+                break
+            if isinstance(content, list):
+                chunks = []
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        chunks.append(str(part.get('text', '')))
+                assistant_text = ''.join(chunks)
+                break
+        if not assistant_text:
+            return None
+        ids = [int(x) for x in re.findall(r'\d+', str(assistant_text))]
+        if len(ids) != 3 or len(set(ids)) != 3:
+            return None
+        if any(i < 1 or i > 16 for i in ids):
+            return None
+        return (ids[0], ids[1], ids[2])
+
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
         if not inputs:
@@ -1178,9 +1215,79 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             if self.async_generate and not outputs:
                 return outputs
             assert len(inputs) == len(outputs)
-            return [
+            merged = [
                 merge_output_input_data(deepcopy(input_data), output) for input_data, output in zip(inputs, outputs)
             ]
+            if not (self.grpo_dedupe_rollouts and self.grpo_dedupe_max_retries > 0):
+                return merged
+
+            # Local per-rank dedupe only: no all_gather_object of completions.
+            grouped_indices: Dict[str, List[int]] = OrderedDict()
+            for idx, item in enumerate(merged):
+                pid = item.get('prompt_id')
+                if pid is None:
+                    # Fallback grouping by generation block.
+                    ng = max(1, int(getattr(self, 'num_generations', 1)))
+                    pid = f'block_{idx // ng}'
+                grouped_indices.setdefault(str(pid), []).append(idx)
+
+            total_retried = 0
+            total_replaced = 0
+            for _, idxs in grouped_indices.items():
+                seen = set()
+                for idx in idxs:
+                    cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
+                    cur_valid = cur_triplet is not None
+                    needs_retry = (self.grpo_dedupe_require_valid and not cur_valid) or (
+                        cur_valid and cur_triplet in seen)
+
+                    if not needs_retry:
+                        if cur_valid:
+                            seen.add(cur_triplet)
+                        continue
+
+                    # Build a prompt-only input for retry.
+                    base_input = deepcopy(merged[idx])
+                    remove_response(base_input['messages'])
+                    for stale_key in (
+                            'response_token_ids', 'response_loss_mask', 'rollout_logprobs', 'finish_reason',
+                            'is_truncated', 'add_eos'):
+                        if stale_key in base_input:
+                            base_input.pop(stale_key)
+
+                    replaced = False
+                    for _ in range(self.grpo_dedupe_max_retries):
+                        total_retried += 1
+                        retry_requests = self.inputs2requests([base_input])
+                        retry_outputs = self._engine_infer(
+                            infer_requests=retry_requests, request_config=self.request_config, use_tqdm=False)
+                        if not retry_outputs:
+                            continue
+                        candidate = merge_output_input_data(deepcopy(base_input), retry_outputs[0])
+                        cand_triplet = self._extract_triplet_from_messages(candidate.get('messages', []))
+                        cand_valid = cand_triplet is not None
+                        if self.grpo_dedupe_require_valid and not cand_valid:
+                            continue
+                        if cand_valid and cand_triplet in seen:
+                            continue
+                        merged[idx] = candidate
+                        replaced = True
+                        total_replaced += 1
+                        if cand_valid:
+                            seen.add(cand_triplet)
+                        break
+
+                    if not replaced:
+                        # Keep original sample when retry budget is exhausted.
+                        cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
+                        if cur_triplet is not None:
+                            seen.add(cur_triplet)
+
+            if total_retried > 0:
+                logger.info(
+                    f'Local rollout dedupe: retries={total_retried}, replaced={total_replaced}, '
+                    f'max_retries={self.grpo_dedupe_max_retries}, require_valid={self.grpo_dedupe_require_valid}')
+            return merged
 
         global_inputs = gather_object(inputs)
         results = []
