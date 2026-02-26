@@ -137,14 +137,6 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_exact_unique = os.getenv('GRPO_DEDUPE_EXACT_UNIQUE', '1').lower() in {
             '1', 'true', 'yes', 'on'
         }
-        self.grpo_retry_two_phase = os.getenv('GRPO_RETRY_TWO_PHASE', '1').lower() in {'1', 'true', 'yes', 'on'}
-        self.grpo_retry_phase1_ratio = min(0.95, max(0.1, float(os.getenv('GRPO_RETRY_PHASE1_RATIO', '0.6'))))
-        self.grpo_retry_phase2_require_gt_hit = os.getenv('GRPO_RETRY_PHASE2_REQUIRE_GT_HIT',
-                                                          '1').lower() in {'1', 'true', 'yes', 'on'}
-        self.grpo_retry_phase2_min_hits = min(3, max(1, int(os.getenv('GRPO_RETRY_PHASE2_MIN_HITS', '1'))))
-        self.grpo_retry_phase2_overlap_relax_delta = max(0, int(os.getenv('GRPO_RETRY_PHASE2_OVERLAP_RELAX_DELTA', '1')))
-        self.grpo_retry_temp_peak = max(0.1, float(os.getenv('GRPO_RETRY_TEMP_PEAK', '1.6')))
-        self.grpo_retry_top_p_peak = min(0.999, max(0.1, float(os.getenv('GRPO_RETRY_TOP_P_PEAK', '0.98'))))
         self.grpo_dedupe_strict = os.getenv('GRPO_DEDUPE_STRICT', '1').lower() in {'1', 'true', 'yes', 'on'}
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
@@ -1362,35 +1354,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                                       ) if self.request_config.temperature is not None else 1.0
                     base_top_p = float(self.request_config.top_p) if self.request_config.top_p is not None else 0.95
                     base_top_p = max(base_top_p, 0.95)
-                    phase1_steps = max(1, int(self.grpo_dedupe_max_retries * self.grpo_retry_phase1_ratio))
-                    phase2_steps = max(1, self.grpo_dedupe_max_retries - phase1_steps)
                     for retry_idx in range(self.grpo_dedupe_max_retries):
                         total_retried += 1
                         retry_request_config = deepcopy(self.request_config)
-                        # Two-phase retry schedule:
-                        # phase-1: diversify (increase randomness)
-                        # phase-2: consolidate (cool down randomness for quality)
-                        if self.grpo_retry_two_phase:
-                            if retry_idx < phase1_steps:
-                                t = (retry_idx + 1) / float(phase1_steps)
-                                retry_request_config.temperature = base_temp + (self.grpo_retry_temp_peak - base_temp) * t
-                                retry_request_config.top_p = base_top_p + (self.grpo_retry_top_p_peak - base_top_p) * t
-                                overlap_reject_retry = self.grpo_dedupe_overlap_reject
-                                require_hits_retry = False
-                            else:
-                                t2 = (retry_idx - phase1_steps + 1) / float(phase2_steps)
-                                target_temp = max(0.9, base_temp)
-                                target_top_p = base_top_p
-                                retry_request_config.temperature = self.grpo_retry_temp_peak + (target_temp - self.grpo_retry_temp_peak) * t2
-                                retry_request_config.top_p = self.grpo_retry_top_p_peak + (target_top_p - self.grpo_retry_top_p_peak) * t2
-                                overlap_reject_retry = min(3, self.grpo_dedupe_overlap_reject +
-                                                           self.grpo_retry_phase2_overlap_relax_delta)
-                                require_hits_retry = self.grpo_retry_phase2_require_gt_hit
-                        else:
-                            retry_request_config.temperature = min(base_temp + 0.1 * (retry_idx + 1), self.grpo_retry_temp_peak)
-                            retry_request_config.top_p = min(base_top_p + 0.01 * (retry_idx + 1), self.grpo_retry_top_p_peak)
-                            overlap_reject_retry = self.grpo_dedupe_overlap_reject
-                            require_hits_retry = False
+                        retry_request_config.temperature = min(base_temp + 0.1 * (retry_idx + 1), 1.6)
+                        retry_request_config.top_p = min(base_top_p + 0.01 * (retry_idx + 1), 0.98)
 
                         retry_requests = self.inputs2requests([base_input])
                         retry_outputs = self._engine_infer(
@@ -1404,11 +1372,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         cand_valid = cand_triplet is not None
                         if self.grpo_dedupe_require_valid and not cand_valid:
                             continue
-                        if cand_valid and require_hits_retry and gt_triplet is not None:
-                            hit_count = len(set(cand_triplet) & set(gt_triplet))
-                            if hit_count < self.grpo_retry_phase2_min_hits:
-                                continue
-                        if cand_valid and _violates_diversity(cand_triplet, gt_triplet, overlap_reject_retry):
+                        if cand_valid and _violates_diversity(cand_triplet, gt_triplet):
                             continue
                         merged[idx] = candidate
                         replaced = True
