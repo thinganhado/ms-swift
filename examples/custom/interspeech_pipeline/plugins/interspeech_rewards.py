@@ -1,7 +1,6 @@
 import math
 import os
 import re
-from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Sequence
 
 from swift.rewards import ORM, orms
@@ -48,107 +47,82 @@ def _ndcg_at_3(pred: Sequence[int], gt: Sequence[int]) -> float:
 class InterspeechPrompt1Reward(ORM):
     """
     Prompt-1 reward:
-      R = 1.0 * nDCG@3 + 0.1 * format + 0.5 * novelty
-      novelty = (|pred ∩ GT| - |pred ∩ SFT_top3|) / |pred|
+      R = 1.0 * nDCG@3 + 0.1 * format
     """
 
     W_NDCG = 1.0
     W_FORMAT = 0.1
-    W_NOVELTY = 0.0
-    W_DIVERSITY = 0.0
-    W_DUP = float(os.getenv("INTERSPEECH_W_DUP", "0.05"))
-    W_ID_FREQ = float(os.getenv("INTERSPEECH_W_ID_FREQ", "0.03"))
-    W_TRIPLET = float(os.getenv("INTERSPEECH_W_TRIPLET", "0.02"))
-    EMA_DECAY = float(os.getenv("INTERSPEECH_EMA_DECAY", "0.95"))
-    MAX_DIVERSITY_PENALTY = float(os.getenv("INTERSPEECH_MAX_DIVERSITY_PENALTY", "0.2"))
 
     def __init__(self):
         super().__init__()
-        self._id_ema = defaultdict(float)
-        self._triplet_ema = defaultdict(float)
-
-    @staticmethod
-    def _clip_top3_any(text: str) -> Optional[List[int]]:
-        ids = _parse_ids(text)
-        if len(ids) < 3:
-            return None
-        pred = ids[:3]
-        if any(i < 1 or i > 16 for i in pred):
-            return None
-        return pred
+        self._last_logged_step = -1
+        self._log_every_steps = max(1, int(os.getenv("INTERSPEECH_LOG_EVERY_STEPS", "1")))
+        self._group_size_for_metrics = max(1, int(os.getenv("INTERSPEECH_GROUP_SIZE", "8")))
+        self._rank = int(os.getenv("RANK", os.getenv("LOCAL_RANK", "0")))
 
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
         gt_source = gt_regions if gt_regions is not None else assistant
-        default_sft = os.getenv("INTERSPEECH_SFT_TOP3", "13,1,2")
-        sft_source = sft_top3
 
         rewards: List[float] = []
-        batch_preds_for_ema: List[List[int]] = []
+        valid_count = 0
+        ndcg_sum_valid = 0.0
+        overlap_sum_valid = 0.0
+        valid_triplets: List[tuple] = []
         for i, completion in enumerate(completions):
             pred = _parse_pred_top3(completion)
             fmt = 1.0 if pred is not None else 0.0
-            pred_any = self._clip_top3_any(completion)
 
             gt_text = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
+            if pred is not None:
+                valid_count += 1
+                ndcg_sum_valid += ndcg
+                gt_set_for_overlap = set(gt_ids[:3]) if gt_ids else set()
+                overlap_sum_valid += len(set(pred) & gt_set_for_overlap) / 3.0
+                valid_triplets.append(tuple(pred))
 
-            sft_text = (
-                sft_source[i] if sft_source is not None and i < len(sft_source) else default_sft
+            rewards.append(self.W_NDCG * ndcg + self.W_FORMAT * fmt)
+
+        # Step-level diagnostics (rank-0 only).
+        trainer_state = kwargs.get("trainer_state", None)
+        global_step = int(getattr(trainer_state, "global_step", -1))
+        should_log_step = (
+            global_step >= 0
+            and global_step != self._last_logged_step
+            and (global_step % self._log_every_steps == 0)
+        )
+        if self._rank == 0 and should_log_step:
+            self._last_logged_step = global_step
+            total_n = max(1, len(completions))
+            valid_rate = 100.0 * valid_count / total_n
+            mean_ndcg_valid = (ndcg_sum_valid / valid_count) if valid_count > 0 else 0.0
+            mean_overlap_valid = (overlap_sum_valid / valid_count) if valid_count > 0 else 0.0
+            unique_list_rate = (
+                100.0 * len(set(valid_triplets)) / len(valid_triplets)
+                if valid_triplets
+                else 0.0
             )
-            pred_set = set(pred) if pred is not None else set()
-            gt_set = set(gt_ids)
-            sft_set = set(_parse_ids(sft_text))
-            novelty = 0.0
-            if pred_set:
-                novelty = (len(pred_set & gt_set) - len(pred_set & sft_set)) / float(len(pred_set))
 
-            # Anti-collapse regularization:
-            # - duplicate IDs in top-3
-            # - globally overused IDs (EMA frequency)
-            # - globally repeated triplets (EMA frequency)
-            dup_penalty = 0.0
-            id_freq_penalty = 0.0
-            triplet_penalty = 0.0
-            if pred_any is not None:
-                pred_unique = list(dict.fromkeys(pred_any))
-                dup_cnt = len(pred_any) - len(set(pred_any))
-                dup_penalty = -dup_cnt / 2.0
+            group_size = self._group_size_for_metrics
+            group_vars = []
+            if group_size > 1:
+                for s in range(0, len(rewards), group_size):
+                    rg = rewards[s:s + group_size]
+                    if len(rg) > 1:
+                        m = sum(rg) / len(rg)
+                        group_vars.append(sum((x - m) ** 2 for x in rg) / len(rg))
+            reward_var_within_group = sum(group_vars) / len(group_vars) if group_vars else 0.0
 
-                if pred_unique:
-                    id_freq_penalty = -sum(self._id_ema[rid] for rid in pred_unique) / len(pred_unique)
-                triplet_penalty = -self._triplet_ema[tuple(pred_any)]
-                batch_preds_for_ema.append(pred_any)
-
-            anti_collapse = (
-                self.W_DUP * dup_penalty
-                + self.W_ID_FREQ * id_freq_penalty
-                + self.W_TRIPLET * triplet_penalty
+            print(
+                f"[p1_metrics] step={global_step} "
+                f"valid_format_rate={valid_rate:.2f}% "
+                f"mean_ndcg3_valid={mean_ndcg_valid:.4f} "
+                f"mean_set_overlap_valid={mean_overlap_valid:.4f} "
+                f"reward_var_within_group={reward_var_within_group:.6f} "
+                f"unique_list_rate={unique_list_rate:.2f}%",
+                flush=True,
             )
-            anti_collapse = max(-self.MAX_DIVERSITY_PENALTY, min(0.0, anti_collapse))
-
-            base_reward = self.W_NDCG * ndcg + self.W_FORMAT * fmt + self.W_NOVELTY * novelty
-            rewards.append(base_reward + self.W_DIVERSITY * 0.0 + anti_collapse)
-
-        # Update EMA stats after scoring the batch.
-        if batch_preds_for_ema:
-            id_counts = Counter()
-            triplet_counts = Counter()
-            for pred_any in batch_preds_for_ema:
-                for rid in set(pred_any):
-                    id_counts[rid] += 1
-                triplet_counts[tuple(pred_any)] += 1
-
-            bsz = float(len(batch_preds_for_ema))
-            one_minus_decay = 1.0 - self.EMA_DECAY
-
-            for rid, cnt in id_counts.items():
-                freq = cnt / bsz
-                self._id_ema[rid] = self.EMA_DECAY * self._id_ema[rid] + one_minus_decay * freq
-
-            for trip, cnt in triplet_counts.items():
-                freq = cnt / bsz
-                self._triplet_ema[trip] = self.EMA_DECAY * self._triplet_ema[trip] + one_minus_decay * freq
 
         return rewards
 
