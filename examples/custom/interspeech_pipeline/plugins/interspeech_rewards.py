@@ -66,6 +66,10 @@ class InterspeechPrompt1Reward(ORM):
     def __call__(self, completions, gt_regions=None, assistant=None, sft_top3=None, **kwargs) -> List[float]:
         gt_source = gt_regions if gt_regions is not None else assistant
         gt_source_name = "gt_regions" if gt_regions is not None else "assistant"
+        if gt_source is None:
+            # Extra fallback for datasets that keep label in `solution`.
+            gt_source = kwargs.get("solution")
+            gt_source_name = "solution" if gt_source is not None else gt_source_name
 
         rewards: List[float] = []
         valid_count = 0

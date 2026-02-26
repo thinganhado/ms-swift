@@ -11,7 +11,7 @@ REGION_ID_COL="${REGION_ID_COL:-region_id}"
 ORDER_CSV="${ORDER_CSV:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv}"
 ORDER_SAMPLE_ID_COL="${ORDER_SAMPLE_ID_COL:-image}"
 ORDER_REGION_ID_COL="${ORDER_REGION_ID_COL:-region_id}"
-ORDER_SCORE_COL="${ORDER_SCORE_COL:-region_pixels}"
+ORDER_SCORE_COL="${ORDER_SCORE_COL:-overlap_pixels}"
 IMAGE_DIR="${IMAGE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid}"
 IMAGE_SUFFIX="${IMAGE_SUFFIX:-_grid_img_edge_number_axes.png}"
 

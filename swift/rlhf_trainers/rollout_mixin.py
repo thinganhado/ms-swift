@@ -958,8 +958,35 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         """Preprocess inputs before inference"""
         processed_inputs = self._add_prompt_id_to_inputs(inputs)
         for input_item in processed_inputs:
+            if (not input_item.get('gt_regions')) and input_item.get('messages'):
+                # Preserve prompt-1 GT before remove_response strips assistant target from SFT-style datasets.
+                gt_from_msgs = self._extract_gt_regions_from_messages(input_item['messages'])
+                if gt_from_msgs:
+                    input_item['gt_regions'] = gt_from_msgs
             remove_response(input_item['messages'])
         return processed_inputs
+
+    @staticmethod
+    def _extract_gt_regions_from_messages(messages: List[Dict[str, Any]]) -> Optional[str]:
+        # Look for assistant target in SFT-style rows:
+        # messages = [user_msg, assistant_msg], where assistant content may be text or typed chunks.
+        for msg in reversed(messages):
+            if msg.get('role') != 'assistant':
+                continue
+            content = msg.get('content')
+            if isinstance(content, str):
+                text = content.strip()
+                if text:
+                    return text
+            if isinstance(content, list):
+                chunks = []
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        chunks.append(str(part.get('text', '')))
+                text = ''.join(chunks).strip()
+                if text:
+                    return text
+        return None
 
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""

@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--order-score-col",
-        default="region_pixels",
+        default="overlap_pixels",
         help="Score column in --order-csv. Higher means earlier rank.",
     )
     parser.add_argument("--image-dir", default=DEFAULT_IMAGE_DIR, help="Image directory for sample_id mode.")
