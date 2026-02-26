@@ -1333,11 +1333,20 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                             base_input.pop(stale_key)
 
                     replaced = False
-                    for _ in range(self.grpo_dedupe_max_retries):
+                    base_temp = float(self.request_config.temperature
+                                      ) if self.request_config.temperature is not None else 1.0
+                    base_top_p = float(self.request_config.top_p) if self.request_config.top_p is not None else 0.95
+                    base_top_p = max(base_top_p, 0.95)
+                    for retry_idx in range(self.grpo_dedupe_max_retries):
                         total_retried += 1
+                        retry_request_config = deepcopy(self.request_config)
+                        retry_request_config.temperature = min(base_temp + 0.1 * (retry_idx + 1), 1.6)
+                        retry_request_config.top_p = min(base_top_p + 0.01 * (retry_idx + 1), 0.98)
                         retry_requests = self.inputs2requests([base_input])
                         retry_outputs = self._engine_infer(
-                            infer_requests=retry_requests, request_config=self.request_config, use_tqdm=False)
+                            infer_requests=retry_requests,
+                            request_config=retry_request_config,
+                            use_tqdm=False)
                         if not retry_outputs:
                             continue
                         candidate = merge_output_input_data(deepcopy(base_input), retry_outputs[0])

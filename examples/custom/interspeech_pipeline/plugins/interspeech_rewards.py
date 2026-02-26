@@ -1,6 +1,7 @@
 import math
 import os
 import re
+from collections import Counter
 from typing import Dict, List, Optional, Sequence
 
 from swift.rewards import ORM, orms
@@ -99,8 +100,8 @@ class InterspeechPrompt1Reward(ORM):
 
     W_NDCG = 1.0
     W_FORMAT = 0.1
-    W_DIST = 0.0
-    W_EXACT = 0.2
+    W_DIST = 0.2
+    W_EXACT = 0.0
 
     def __init__(self):
         super().__init__()
@@ -199,13 +200,30 @@ class InterspeechPrompt1Reward(ORM):
 
             group_size = self._group_size_for_metrics
             group_vars = []
+            unique_ids_per_group = []
+            max_id_freq_per_group = []
             if group_size > 1:
                 for s in range(0, len(rewards), group_size):
                     rg = rewards[s:s + group_size]
                     if len(rg) > 1:
                         m = sum(rg) / len(rg)
                         group_vars.append(sum((x - m) ** 2 for x in rg) / len(rg))
+                    # Group diversity diagnostics on valid parsed triplets only.
+                    ids = []
+                    end = min(s + group_size, len(completions))
+                    for j in range(s, end):
+                        trip = _parse_pred_top3(completions[j])
+                        if trip is not None:
+                            ids.extend(trip)
+                    if ids:
+                        c = Counter(ids)
+                        unique_ids_per_group.append(float(len(c)))
+                        max_id_freq_per_group.append(float(max(c.values())))
             reward_var_within_group = sum(group_vars) / len(group_vars) if group_vars else 0.0
+            mean_unique_ids_in_group = (
+                sum(unique_ids_per_group) / len(unique_ids_per_group) if unique_ids_per_group else 0.0)
+            mean_max_id_freq_in_group = (
+                sum(max_id_freq_per_group) / len(max_id_freq_per_group) if max_id_freq_per_group else 0.0)
 
             print(
                 f"[p1_metrics] step={global_step} "
@@ -215,6 +233,8 @@ class InterspeechPrompt1Reward(ORM):
                 f"mean_set_overlap_valid={mean_overlap_valid:.4f} "
                 f"exact_match_rate={exact_match_rate:.2f}% "
                 f"reward_var_within_group={reward_var_within_group:.6f} "
+                f"unique_ids_in_group={mean_unique_ids_in_group:.2f} "
+                f"max_id_freq_in_group={mean_max_id_freq_in_group:.2f} "
                 f"unique_list_rate={unique_list_rate:.2f}%",
                 flush=True,
             )
