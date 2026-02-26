@@ -99,11 +99,9 @@ class InterspeechPrompt1Reward(ORM):
       R = 1.0 * nDCG@3 + 0.1 * format
     """
 
-    W_NDCG = 1.0
-    W_HIT = 0.5
+    W_NDCG = 0.3
+    W_HIT = 1.0
     W_FORMAT = 0.1
-    W_DIST = 0.0
-    W_EXACT = 0.0
 
     def __init__(self):
         super().__init__()
@@ -145,9 +143,8 @@ class InterspeechPrompt1Reward(ORM):
         rewards: List[float] = []
         valid_count = 0
         ndcg_sum_valid = 0.0
+        hit_sum_valid = 0.0
         overlap_sum_valid = 0.0
-        dist_sum_valid = 0.0
-        exact_count = 0
         valid_triplets: List[tuple] = []
         used_source_counts = {
             "gt_regions": 0,
@@ -165,20 +162,16 @@ class InterspeechPrompt1Reward(ORM):
             used_source_counts[used_source] += 1
             gt_ids = _parse_ids(gt_text)
             ndcg = _ndcg_at_3(pred, gt_ids) if pred is not None and gt_ids else 0.0
-            dist_sim = _grid_dist_similarity(pred, gt_ids) if pred is not None and gt_ids else 0.0
             hit = (len(set(pred) & set(gt_ids[:3])) / 3.0) if (pred is not None and gt_ids) else 0.0
-            exact = 1.0 if (pred is not None and gt_ids and tuple(pred) == tuple(gt_ids[:3])) else 0.0
             if pred is not None:
                 valid_count += 1
                 ndcg_sum_valid += ndcg
-                dist_sum_valid += dist_sim
-                exact_count += int(exact > 0.0)
+                hit_sum_valid += hit
                 gt_set_for_overlap = set(gt_ids[:3]) if gt_ids else set()
                 overlap_sum_valid += len(set(pred) & gt_set_for_overlap) / 3.0
                 valid_triplets.append(tuple(pred))
 
-            rewards.append(self.W_NDCG * ndcg + self.W_HIT * hit + self.W_DIST * dist_sim +
-                           self.W_FORMAT * fmt + self.W_EXACT * exact)
+            rewards.append(self.W_NDCG * ndcg + self.W_HIT * hit + self.W_FORMAT * fmt)
 
         # Step-level diagnostics (rank-0 only).
         trainer_state = kwargs.get("trainer_state", None)
@@ -193,9 +186,8 @@ class InterspeechPrompt1Reward(ORM):
             total_n = max(1, len(completions))
             valid_rate = 100.0 * valid_count / total_n
             mean_ndcg_valid = (ndcg_sum_valid / valid_count) if valid_count > 0 else 0.0
-            mean_dist_valid = (dist_sum_valid / valid_count) if valid_count > 0 else 0.0
+            mean_hit_valid = (hit_sum_valid / valid_count) if valid_count > 0 else 0.0
             mean_overlap_valid = (overlap_sum_valid / valid_count) if valid_count > 0 else 0.0
-            exact_match_rate = (100.0 * exact_count / valid_count) if valid_count > 0 else 0.0
             unique_list_rate = (
                 100.0 * len(set(valid_triplets)) / len(valid_triplets)
                 if valid_triplets
@@ -232,10 +224,9 @@ class InterspeechPrompt1Reward(ORM):
             print(
                 f"[p1_metrics] step={global_step} "
                 f"valid_format_rate={valid_rate:.2f}% "
+                f"mean_hit_valid={mean_hit_valid:.4f} "
                 f"mean_ndcg3_valid={mean_ndcg_valid:.4f} "
-                f"mean_grid_dist_sim_valid={mean_dist_valid:.4f} "
                 f"mean_set_overlap_valid={mean_overlap_valid:.4f} "
-                f"exact_match_rate={exact_match_rate:.2f}% "
                 f"reward_var_within_group={reward_var_within_group:.6f} "
                 f"unique_ids_in_group={mean_unique_ids_in_group:.2f} "
                 f"max_id_freq_in_group={mean_max_id_freq_in_group:.2f} "
