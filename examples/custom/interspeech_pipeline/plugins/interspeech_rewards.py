@@ -295,30 +295,81 @@ def _norm_phon(v: str) -> Optional[str]:
     return None
 
 
-_REGION_PATTERN = re.compile(
-    r"\(\s*(\d+)\s*,\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*(.*?)\s*\)",
-    flags=re.DOTALL,
-)
+_TUPLE_OUTER_PATTERN = re.compile(r"\((.*?)\)", flags=re.DOTALL)
+_CN_PATTERN = re.compile(r"\bcn\s*=\s*(\d+)\b", flags=re.IGNORECASE)
+_T_PATTERN = re.compile(r"\bt\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
+_F_PATTERN = re.compile(r"\bf\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
+_P_PATTERN = re.compile(r"\bp\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
+_EN_PATTERN = re.compile(r"\ben\s*=\s*(.+)\s*$", flags=re.IGNORECASE | re.DOTALL)
 
 
-def _parse_region_tuples(text: str) -> Optional[List[Dict[str, str]]]:
-    matches = _REGION_PATTERN.findall(str(text or ""))
-    if len(matches) != 3:
+def _strip_wrapped_quotes(s: str) -> str:
+    x = str(s or "").strip()
+    if len(x) >= 2 and x[0] == '"' and x[-1] == '"':
+        return x[1:-1]
+    return x
+
+
+def _parse_region_tuples(text: str) -> Optional[List[Dict[str, object]]]:
+    raw_tuples = _TUPLE_OUTER_PATTERN.findall(str(text or ""))
+    if len(raw_tuples) != 3:
         return None
-    rows = []
-    seen = set()
-    for cn_raw, t_raw, f_raw, p_raw, en_raw in matches:
-        cn = str(int(cn_raw))
-        if cn in seen:
-            return None
-        seen.add(cn)
+
+    rows: List[Dict[str, object]] = []
+    for raw in raw_tuples:
+        body = str(raw or "").strip()
+        cn_raw = ""
+        t_raw = ""
+        f_raw = ""
+        p_raw = ""
+        en_raw = ""
+
+        # Preferred: keyed format
+        # (Cn=1, T=speech, F=mid, P=vowel, En="...")
+        m_cn = _CN_PATTERN.search(body)
+        m_t = _T_PATTERN.search(body)
+        m_f = _F_PATTERN.search(body)
+        m_p = _P_PATTERN.search(body)
+        m_en = _EN_PATTERN.search(body)
+        if m_cn and m_t and m_f and m_p and m_en:
+            cn_raw = m_cn.group(1).strip()
+            t_raw = m_t.group(1).strip()
+            f_raw = m_f.group(1).strip()
+            p_raw = m_p.group(1).strip()
+            en_raw = m_en.group(1).strip()
+        else:
+            # Backward-compatible positional format:
+            # (1, speech, mid, vowel, ...)
+            parts = [p.strip() for p in body.split(",", 4)]
+            if len(parts) == 5:
+                cn_raw, t_raw, f_raw, p_raw, en_raw = parts
+            else:
+                return None
+
+        try:
+            cn_i = int(cn_raw)
+        except Exception:
+            cn_i = -1
+        cn_ok = 1 <= cn_i <= 16
+
         t = _norm_time(t_raw)
         f = _norm_freq(f_raw)
         p = _norm_phon(p_raw)
-        en = str(en_raw).strip()
-        if t is None or f is None or p is None or not en:
-            return None
-        rows.append({"Cn": cn, "T": t, "F": f, "P": p, "En": en})
+        en_full = str(en_raw or "").strip()
+        en_text = _strip_wrapped_quotes(en_full)
+        en_quoted = len(en_full) >= 2 and en_full[0] == '"' and en_full[-1] == '"'
+
+        rows.append(
+            {
+                "Cn": str(cn_i) if cn_ok else "",
+                "Cn_i": cn_i,
+                "T": t,
+                "F": f,
+                "P": p,
+                "En": en_text,
+                "en_quoted": en_quoted,
+            }
+        )
     return rows
 
 
@@ -365,55 +416,283 @@ def _independent_extract_from_en(en_text: str) -> Dict[str, Optional[str]]:
 
 class InterspeechPrompt2Reward(ORM):
     """
-    Prompt-2 reward:
-      avg_over_3_regions(0.75*field_acc + 0.25*consistency + 0.1*format)
+    Prompt-2 reward (overlap-masked):
+      R = (1/3) * sum_i (W_FMT*fmt_i + m_i*R_sup_i + (1-m_i)*R_rob_i)
+
+    where:
+      R_sup_i = W_ACC*acc_i + W_CONS*cons_i
+      R_rob_i = W_BOUND*bound_i + W_UNC*unc_i + W_CONS_ROB*cons_i
     """
 
-    W_ACC = 0.75
-    W_CONS = 0.25
+    W_ACC = 0.6
+    W_CONS = 0.3
     W_FMT = 0.1
+    W_BOUND = 0.1
+    W_UNC = 0.1
+    W_CONS_ROB = 0.0
 
-    def __call__(self, completions, gt_prompt2=None, assistant=None, prompt2_target=None, **kwargs) -> List[float]:
-        gt_source = gt_prompt2
-        if gt_source is None:
-            gt_source = prompt2_target
-        if gt_source is None:
-            gt_source = assistant
+    def __init__(self):
+        super().__init__()
+        self._last_logged_step = -1
+        self._log_every_steps = max(1, int(os.getenv("INTERSPEECH_LOG_EVERY_STEPS", "1")))
+        self._group_size_for_metrics = max(1, int(os.getenv("INTERSPEECH_GROUP_SIZE", "8")))
+        self._rank = int(os.getenv("RANK", os.getenv("LOCAL_RANK", "0")))
+        self._debug_reward = os.getenv("INTERSPEECH_DEBUG_REWARD", "0").lower() in {"1", "true", "yes", "on"}
+        self._debug_print_samples = max(1, int(os.getenv("INTERSPEECH_DEBUG_SAMPLES", "8")))
+
+    @staticmethod
+    def _format_tuple_score(pred: Dict[str, object]) -> float:
+        cn_i = int(pred.get("Cn_i", -1))
+        t = pred.get("T")
+        f = pred.get("F")
+        p = pred.get("P")
+        en = str(pred.get("En", "")).strip()
+        en_quoted = bool(pred.get("en_quoted", False))
+        ok = (1 <= cn_i <= 16) and (t is not None) and (f is not None) and (p is not None) and bool(en) and en_quoted
+        return 1.0 if ok else 0.0
+
+    @staticmethod
+    def _bound_score(pred: Dict[str, object]) -> float:
+        cn_i = int(pred.get("Cn_i", -1))
+        en = str(pred.get("En", "")).strip()
+        if not en or not (1 <= cn_i <= 16):
+            return 0.0
+        ids = [int(x) for x in re.findall(r"\d+", en) if 1 <= int(x) <= 16]
+        # no other region IDs besides Cn_i
+        return 1.0 if all(i == cn_i for i in ids) else 0.0
+
+    @staticmethod
+    def _unc_score(pred: Dict[str, object]) -> float:
+        en = _norm_space(str(pred.get("En", "")))
+        return 1.0 if en.startswith("uncertain") else 0.0
+
+    @staticmethod
+    def _consistency_score(pred: Dict[str, object]) -> float:
+        t = pred.get("T")
+        f = pred.get("F")
+        p = pred.get("P")
+        en = str(pred.get("En", "")).strip()
+        if t is None or f is None or p is None or not en:
+            return 0.0
+        ext = _independent_extract_from_en(en)
+        return (
+            (1.0 if ext["T"] is not None and ext["T"] == t else 0.0)
+            + (1.0 if ext["F"] is not None and ext["F"] == f else 0.0)
+            + (1.0 if ext["P"] is not None and ext["P"] == p else 0.0)
+        ) / 3.0
+
+    @staticmethod
+    def _extract_gt_ids_and_rows(
+        i: int,
+        gt_prompt2,
+        prompt2_target,
+        gt_regions,
+        assistant,
+    ) -> (set, Dict[str, Dict[str, object]]):
+        # Prefer full GT tuple source.
+        gt_tuple_text = ""
+        for src in (gt_prompt2, prompt2_target):
+            if src is not None and i < len(src):
+                t = str(src[i] if src[i] is not None else "").strip()
+                if t:
+                    gt_tuple_text = t
+                    break
+
+        gt_rows_by_cn: Dict[str, Dict[str, object]] = {}
+        gt_ids: set = set()
+        if gt_tuple_text:
+            gt_rows = _parse_region_tuples(gt_tuple_text)
+            if gt_rows is not None:
+                for r in gt_rows:
+                    cn = str(r.get("Cn", "")).strip()
+                    if not cn:
+                        continue
+                    gt_rows_by_cn[cn] = r
+                    gt_ids.add(int(cn))
+                return gt_ids, gt_rows_by_cn
+
+        # Fallback for pred-phase: only GT IDs are needed to build overlap mask m_i.
+        for src in (gt_regions, assistant):
+            if src is not None and i < len(src):
+                t = str(src[i] if src[i] is not None else "").strip()
+                if not t:
+                    continue
+                ids = _parse_ids(t)[:3]
+                ids = [x for x in ids if 1 <= int(x) <= 16]
+                if ids:
+                    return set(ids), {}
+        return set(), {}
+
+    def __call__(
+        self,
+        completions,
+        gt_prompt2=None,
+        assistant=None,
+        prompt2_target=None,
+        gt_regions=None,
+        **kwargs,
+    ) -> List[float]:
 
         rewards: List[float] = []
+        valid_count = 0
+        tuple_total = 0
+        tuple_fmt_sum = 0.0
+        tuple_m_sum = 0.0
+        sup_tuple_count = 0
+        rob_tuple_count = 0
+        acc_sup_sum = 0.0
+        cons_sup_sum = 0.0
+        cons_rob_sum = 0.0
+        bound_rob_sum = 0.0
+        unc_rob_sum = 0.0
+        gt_tuple_available = 0
+
+        debug_rows: List[Dict[str, object]] = []
         for i, completion in enumerate(completions):
             pred_rows = _parse_region_tuples(completion)
-            gt_text = gt_source[i] if gt_source is not None and i < len(gt_source) else ""
-            gt_rows = _parse_region_tuples(gt_text)
-
-            if pred_rows is None or gt_rows is None:
+            if pred_rows is None:
                 rewards.append(0.0)
+                if len(debug_rows) < self._debug_print_samples:
+                    debug_rows.append(
+                        {
+                            "i": i,
+                            "parsed": False,
+                            "gt_ids": [],
+                            "pred_cns": [],
+                            "m_mask": [],
+                            "reward": 0.0,
+                            "raw_pred": str(completion)[:200],
+                        }
+                    )
                 continue
 
-            gt_by_cn = {r["Cn"]: r for r in gt_rows}
-            fmt = 1.0
+            valid_count += 1
+            gt_ids, gt_by_cn = self._extract_gt_ids_and_rows(
+                i=i,
+                gt_prompt2=gt_prompt2,
+                prompt2_target=prompt2_target,
+                gt_regions=gt_regions,
+                assistant=assistant,
+            )
+            if gt_by_cn:
+                gt_tuple_available += 1
+
             total = 0.0
+            pred_cns: List[int] = []
+            m_mask: List[int] = []
             for pred in pred_rows:
-                gt = gt_by_cn.get(pred["Cn"])
-                if gt is None:
-                    acc = 0.0
+                fmt_i = self._format_tuple_score(pred)
+                cn = str(pred.get("Cn", "")).strip()
+                cn_i = int(pred.get("Cn_i", -1))
+                m_i = 1.0 if (cn_i in gt_ids) else 0.0
+                pred_cns.append(cn_i)
+                m_mask.append(int(m_i))
+                tuple_total += 1
+                tuple_fmt_sum += fmt_i
+                tuple_m_sum += m_i
+
+                cons = self._consistency_score(pred)
+
+                if m_i > 0.0:
+                    sup_tuple_count += 1
+                    gt = gt_by_cn.get(cn)
+                    if gt is None:
+                        acc = 0.0
+                    else:
+                        acc = (
+                            (1.0 if pred.get("T") == gt.get("T") else 0.0)
+                            + (1.0 if pred.get("F") == gt.get("F") else 0.0)
+                            + (1.0 if pred.get("P") == gt.get("P") else 0.0)
+                        ) / 3.0
+                    acc_sup_sum += acc
+                    cons_sup_sum += cons
+                    r_sup = self.W_ACC * acc + self.W_CONS * cons
+                    total += self.W_FMT * fmt_i + r_sup
                 else:
-                    acc = (
-                        (1.0 if pred["T"] == gt["T"] else 0.0)
-                        + (1.0 if pred["F"] == gt["F"] else 0.0)
-                        + (1.0 if pred["P"] == gt["P"] else 0.0)
-                    ) / 3.0
+                    rob_tuple_count += 1
+                    bound = self._bound_score(pred)
+                    unc = self._unc_score(pred)
+                    cons_rob_sum += cons
+                    bound_rob_sum += bound
+                    unc_rob_sum += unc
+                    r_rob = self.W_BOUND * bound + self.W_UNC * unc + self.W_CONS_ROB * cons
+                    total += self.W_FMT * fmt_i + r_rob
 
-                ext = _independent_extract_from_en(pred["En"])
-                cons = (
-                    (1.0 if ext["T"] is not None and ext["T"] == pred["T"] else 0.0)
-                    + (1.0 if ext["F"] is not None and ext["F"] == pred["F"] else 0.0)
-                    + (1.0 if ext["P"] is not None and ext["P"] == pred["P"] else 0.0)
-                ) / 3.0
+            sample_reward = total / 3.0
+            rewards.append(sample_reward)
+            if len(debug_rows) < self._debug_print_samples:
+                debug_rows.append(
+                    {
+                        "i": i,
+                        "parsed": True,
+                        "gt_ids": sorted(list(gt_ids)),
+                        "pred_cns": pred_cns,
+                        "m_mask": m_mask,
+                        "reward": sample_reward,
+                        "raw_pred": str(completion)[:200],
+                    }
+                )
 
-                total += self.W_ACC * acc + self.W_CONS * cons + self.W_FMT * fmt
+        trainer_state = kwargs.get("trainer_state", None)
+        global_step = int(getattr(trainer_state, "global_step", -1))
+        should_log_step = (
+            global_step >= 0
+            and global_step != self._last_logged_step
+            and (global_step % self._log_every_steps == 0)
+        )
+        if self._rank == 0 and should_log_step:
+            self._last_logged_step = global_step
+            total_n = max(1, len(completions))
+            valid_rate = 100.0 * valid_count / total_n
+            mean_tuple_fmt = (tuple_fmt_sum / tuple_total) if tuple_total > 0 else 0.0
+            overlap_tuple_rate = (tuple_m_sum / tuple_total) if tuple_total > 0 else 0.0
+            mean_acc_sup = (acc_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
+            mean_cons_sup = (cons_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
+            mean_cons_rob = (cons_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
+            mean_bound_rob = (bound_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
+            mean_unc_rob = (unc_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
+            gt_tuple_avail_rate = 100.0 * gt_tuple_available / total_n
 
-            rewards.append(total / 3.0)
+            group_size = self._group_size_for_metrics
+            group_vars = []
+            if group_size > 1:
+                for s in range(0, len(rewards), group_size):
+                    rg = rewards[s:s + group_size]
+                    if len(rg) > 1:
+                        m = sum(rg) / len(rg)
+                        group_vars.append(sum((x - m) ** 2 for x in rg) / len(rg))
+            reward_var_within_group = sum(group_vars) / len(group_vars) if group_vars else 0.0
+
+            print(
+                f"[p2_metrics] step={global_step} "
+                f"valid_format_rate={valid_rate:.2f}% "
+                f"mean_tuple_fmt={mean_tuple_fmt:.4f} "
+                f"overlap_tuple_rate={overlap_tuple_rate:.4f} "
+                f"mean_acc_sup={mean_acc_sup:.4f} "
+                f"mean_cons_sup={mean_cons_sup:.4f} "
+                f"mean_bound_rob={mean_bound_rob:.4f} "
+                f"mean_unc_rob={mean_unc_rob:.4f} "
+                f"mean_cons_rob={mean_cons_rob:.4f} "
+                f"gt_tuple_avail_rate={gt_tuple_avail_rate:.2f}% "
+                f"reward_var_within_group={reward_var_within_group:.6f}",
+                flush=True,
+            )
+            if self._debug_reward:
+                print(
+                    f"[p2_debug] lens: completions={len(completions)} "
+                    f"gt_prompt2={len(gt_prompt2) if gt_prompt2 is not None else 0} "
+                    f"prompt2_target={len(prompt2_target) if prompt2_target is not None else 0} "
+                    f"gt_regions={len(gt_regions) if gt_regions is not None else 0} "
+                    f"assistant={len(assistant) if assistant is not None else 0}",
+                    flush=True,
+                )
+                for row in debug_rows:
+                    print(
+                        f"[p2_debug] i={row['i']} parsed={row['parsed']} gt_ids={row['gt_ids']} "
+                        f"pred_cns={row['pred_cns']} m={row['m_mask']} reward={float(row['reward']):.4f} "
+                        f"raw_pred={row['raw_pred']!r}",
+                        flush=True,
+                    )
 
         return rewards
 

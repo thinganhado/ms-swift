@@ -147,6 +147,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
         }
+        # Prompt-2 retry gate: enforce generated tuple Cn IDs match input prompt1_output IDs.
+        self.grpo_p2_retry_cn_match = os.getenv('GRPO_P2_RETRY_CN_MATCH', '0').lower() in {
+            '1', 'true', 'yes', 'on'
+        }
 
         self.disable_rollout_importance_sampling = False
 
@@ -1064,6 +1068,62 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             return RolloutTrainerMixin._extract_triplet_from_messages(msgs)
         return None
 
+    @staticmethod
+    def _extract_prompt1_triplet_from_input(input_data: Dict[str, Any]) -> Optional[Tuple[int, int, int]]:
+        """Parse [a,b,c] style prompt1_output from input row."""
+        raw = str(input_data.get('prompt1_output', '') or '').strip()
+        if not raw:
+            return None
+        ids = [int(x) for x in re.findall(r'\d+', raw)]
+        if len(ids) < 3:
+            return None
+        ids = ids[:3]
+        if len(set(ids)) != 3 or any(i < 1 or i > 16 for i in ids):
+            return None
+        return (ids[0], ids[1], ids[2])
+
+    @staticmethod
+    def _extract_cn_triplet_from_messages(messages: List[Dict[str, Any]]) -> Optional[Tuple[int, int, int]]:
+        """Parse tuple Cn IDs from latest assistant output:
+        (Cn=..., T=..., F=..., P=..., En="..."); ...
+        """
+        if not messages:
+            return None
+        assistant_text = ''
+        for msg in reversed(messages):
+            if msg.get('role') != 'assistant':
+                continue
+            content = msg.get('content')
+            if isinstance(content, str):
+                assistant_text = content
+                break
+            if isinstance(content, list):
+                chunks = []
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        chunks.append(str(part.get('text', '')))
+                assistant_text = ''.join(chunks)
+                break
+        if not assistant_text:
+            return None
+
+        text = str(assistant_text)
+        # Preferred keyed form
+        cns = [int(x) for x in re.findall(r'\bCn\s*=\s*(\d+)\b', text, flags=re.IGNORECASE)]
+        if len(cns) != 3:
+            # Backward-compatible positional tuple fallback: take first integer of each parenthesized tuple.
+            tuples = re.findall(r'\((.*?)\)', text, flags=re.DOTALL)
+            cns = []
+            for t in tuples:
+                m = re.search(r'\d+', t)
+                if m:
+                    cns.append(int(m.group(0)))
+            if len(cns) != 3:
+                return None
+        if len(set(cns)) != 3 or any(i < 1 or i > 16 for i in cns):
+            return None
+        return (cns[0], cns[1], cns[2])
+
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
         if not inputs:
@@ -1253,7 +1313,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             merged = [
                 merge_output_input_data(deepcopy(input_data), output) for input_data, output in zip(inputs, outputs)
             ]
-            if not (self.grpo_dedupe_rollouts and self.grpo_dedupe_max_retries > 0):
+            if not ((self.grpo_dedupe_rollouts and self.grpo_dedupe_max_retries > 0) or self.grpo_p2_retry_cn_match):
                 return merged
 
             # Local per-rank dedupe only: no all_gather_object of completions.
@@ -1349,8 +1409,18 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     gt_triplet = self._extract_gt_triplet_from_input(merged[idx])
                     cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
                     cur_valid = cur_triplet is not None
-                    needs_retry = (self.grpo_dedupe_require_valid and not cur_valid) or (
-                        cur_valid and _violates_diversity(cur_triplet, gt_triplet))
+                    expected_cn_triplet = self._extract_prompt1_triplet_from_input(merged[idx])
+                    cur_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
+                    cur_cn_mismatch = (
+                        self.grpo_p2_retry_cn_match
+                        and expected_cn_triplet is not None
+                        and (cur_cn_triplet is None or cur_cn_triplet != expected_cn_triplet)
+                    )
+                    needs_retry = (
+                        (self.grpo_dedupe_require_valid and not cur_valid)
+                        or (cur_valid and _violates_diversity(cur_triplet, gt_triplet))
+                        or cur_cn_mismatch
+                    )
 
                     if not needs_retry:
                         _accept_triplet(cur_triplet, gt_triplet)
@@ -1387,9 +1457,17 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         candidate = merge_output_input_data(deepcopy(base_input), retry_outputs[0])
                         cand_triplet = self._extract_triplet_from_messages(candidate.get('messages', []))
                         cand_valid = cand_triplet is not None
+                        cand_cn_triplet = self._extract_cn_triplet_from_messages(candidate.get('messages', []))
+                        cand_cn_mismatch = (
+                            self.grpo_p2_retry_cn_match
+                            and expected_cn_triplet is not None
+                            and (cand_cn_triplet is None or cand_cn_triplet != expected_cn_triplet)
+                        )
                         if self.grpo_dedupe_require_valid and not cand_valid:
                             continue
                         if cand_valid and _violates_diversity(cand_triplet, gt_triplet):
+                            continue
+                        if cand_cn_mismatch:
                             continue
                         if (self.grpo_retry_use_gt_feedback and gt_triplet is not None and cand_valid
                                 and self.grpo_retry_require_improvement):
@@ -1411,7 +1489,13 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         # If it still violates constraints, do NOT register it into dedupe state.
                         # This keeps subsequent rollouts from inheriting repeated non-hit IDs.
                         final_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
-                        if final_triplet is None or not _violates_diversity(final_triplet, gt_triplet):
+                        final_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
+                        final_cn_mismatch = (
+                            self.grpo_p2_retry_cn_match
+                            and expected_cn_triplet is not None
+                            and (final_cn_triplet is None or final_cn_triplet != expected_cn_triplet)
+                        )
+                        if (final_triplet is None or not _violates_diversity(final_triplet, gt_triplet)) and (not final_cn_mismatch):
                             _accept_triplet(final_triplet, gt_triplet)
                         else:
                             total_exhausted_violations += 1
@@ -1426,6 +1510,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'exact_unique={self.grpo_dedupe_exact_unique}, '
                     f'gt_feedback={self.grpo_retry_use_gt_feedback}, '
                     f'require_improvement={self.grpo_retry_require_improvement}, '
+                    f'p2_cn_match={self.grpo_p2_retry_cn_match}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
                     f'forced_repairs=0, strict_failures=0, exhausted_violations={total_exhausted_violations}')
             return merged

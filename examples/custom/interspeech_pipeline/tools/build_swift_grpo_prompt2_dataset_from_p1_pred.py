@@ -12,6 +12,8 @@ HARDCODED_QUERY2_USER_TEMPLATE = (
 DEFAULT_SPEC_ROOT = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid"
 DEFAULT_MFA_ROOT = "/scratch3/che489/Ha/interspeech/datasets/vocv4_mfa_aligned"
 DEFAULT_IMAGE_SUFFIX = "_grid_img_edge_number_axes.png"
+DEFAULT_GT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
+DEFAULT_DIFF_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv"
 
 
 def _norm(x: Any) -> str:
@@ -147,6 +149,52 @@ def _extract_transcript(item: Dict[str, Any], mfa_root: Path, sample_id: str) ->
     return _extract_transcript_word_tier_like_qwen_region(mfa_root, sample_id)
 
 
+def _load_overlap_map(diff_csv: Path) -> Dict[tuple, float]:
+    out: Dict[tuple, float] = {}
+    if not diff_csv.exists():
+        return out
+    import csv  # local import to keep script minimal if unused
+
+    with diff_csv.open("r", encoding="utf-8", newline="") as f:
+        for r in csv.DictReader(f):
+            sid = _norm(r.get("sample_id"))
+            try:
+                rid = int(_norm(r.get("region_id")))
+            except Exception:
+                continue
+            try:
+                ov = float(_norm(r.get("overlap_pixels")))
+            except Exception:
+                ov = -1.0
+            out[(sid, rid)] = ov
+    return out
+
+
+def _load_gt_regions_map(gt_csv: Path, overlap_map: Dict[tuple, float]) -> Dict[str, List[int]]:
+    out: Dict[str, List[int]] = {}
+    if not gt_csv.exists():
+        return out
+    import csv  # local import to keep script minimal if unused
+
+    seen: Dict[str, List[int]] = {}
+    with gt_csv.open("r", encoding="utf-8", newline="") as f:
+        for r in csv.DictReader(f):
+            sid = _norm(r.get("sample_id"))
+            try:
+                rid = int(_norm(r.get("region_id")))
+            except Exception:
+                continue
+            seen.setdefault(sid, [])
+            if rid not in seen[sid]:
+                seen[sid].append(rid)
+    for sid, ids in seen.items():
+        if len(ids) < 3:
+            continue
+        ids_sorted = sorted(ids, key=lambda rid: (-overlap_map.get((sid, rid), -1.0), rid))
+        out[sid] = ids_sorted[:3]
+    return out
+
+
 def _build_row(
     sample_id: str,
     ids: List[int],
@@ -189,6 +237,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--output-json", required=True)
     ap.add_argument("--spec-root", default=DEFAULT_SPEC_ROOT)
     ap.add_argument("--mfa-root", default=DEFAULT_MFA_ROOT)
+    ap.add_argument(
+        "--gt-csv",
+        default=DEFAULT_GT_CSV,
+        help="GT CSV used to attach gt_regions for overlap mask reward.",
+    )
+    ap.add_argument("--diff-csv", default=DEFAULT_DIFF_CSV, help="Optional overlap CSV for ordering GT top3.")
     ap.add_argument("--image-suffix", default=DEFAULT_IMAGE_SUFFIX)
     ap.add_argument("--sample-id-contains", default="_LA_T_")
     ap.add_argument("--strict-ids", action="store_true", help="Drop records if top3 parsing fails strict checks.")
@@ -232,6 +286,12 @@ def main() -> None:
     dst = Path(args.output_json).expanduser().resolve()
     spec_root = Path(args.spec_root).expanduser().resolve()
     mfa_root = Path(args.mfa_root).expanduser().resolve()
+    gt_regions_map: Dict[str, List[int]] = {}
+    gt_csv = Path(args.gt_csv).expanduser().resolve() if args.gt_csv else Path("")
+    diff_csv = Path(args.diff_csv).expanduser().resolve() if args.diff_csv else Path("")
+    if str(gt_csv) and gt_csv.exists():
+        overlap_map = _load_overlap_map(diff_csv) if str(diff_csv) and diff_csv.exists() else {}
+        gt_regions_map = _load_gt_regions_map(gt_csv, overlap_map)
 
     data = _load_records(args)
 
@@ -272,6 +332,8 @@ def main() -> None:
             user_template=args.user_template,
             raw_pred=pred_text,
         )
+        if sample_id in gt_regions_map:
+            rec["gt_regions"] = ",".join(map(str, gt_regions_map[sample_id]))
         out.append(rec)
         kept += 1
 
