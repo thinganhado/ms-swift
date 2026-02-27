@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
+import re
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 HARDCODED_QUERY2_USER_TEMPLATE = (
     "Explain the spoof artifact for each of the three selected region IDs in "
     "{prompt1_output} . This is the transcript for context: {transcript}"
 )
+DEFAULT_SPEC_ROOT = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/specs/grid"
+DEFAULT_MFA_ROOT = "/scratch3/che489/Ha/interspeech/datasets/vocv4_mfa_aligned"
 
 
 def _map_role(role: str) -> str:
@@ -82,14 +87,188 @@ def _extract_gt_prompt2(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str
     return ""
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input-json", required=True)
-    ap.add_argument("--output-json", required=True)
-    args = ap.parse_args()
+def _norm(x) -> str:
+    return str(x or "").strip()
 
+
+def _to_one_line(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _normalize_explanation(explanation: str) -> str:
+    s = str(explanation or "").strip()
+    s = re.sub(r"</?Explanation>", "", s, flags=re.IGNORECASE).strip()
+    s = s.replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'")
+    s = re.sub(r'"([^"]+)"', r"[w:\1]", s)
+    s = s.replace('"', "")
+    return _to_one_line(s)
+
+
+def _extract_transcript_word_tier_like_qwen_region(mfa_root: Path, sample_id: str) -> str:
+    p = mfa_root / f"{sample_id}.json"
+    if not p.exists():
+        return ""
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    if isinstance(obj, dict):
+        entries = obj.get("tiers", {}).get("words", {}).get("entries", [])
+        parts = []
+        for e in entries:
+            if not isinstance(e, (list, tuple)) or len(e) < 3:
+                continue
+            try:
+                start = float(e[0])
+                end = float(e[1])
+                word = str(e[2]).strip()
+            except Exception:
+                continue
+            if word:
+                parts.append(f"[{start:.2f}-{end:.2f}] {word}")
+        if parts:
+            return _to_one_line(" ".join(parts))
+    if isinstance(obj, str):
+        return _to_one_line(obj)
+    return ""
+
+
+def _pair_key(row: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+    sid = _norm(row.get("sample_id"))
+    try:
+        rid = int(_norm(row.get("region_id")))
+    except Exception:
+        return None
+    return sid, rid
+
+
+def _build_from_csv(args: argparse.Namespace) -> List[Dict[str, Any]]:
     src = Path(args.input_json).expanduser().resolve()
-    dst = Path(args.output_json).expanduser().resolve()
+    spec_root = Path(args.spec_root).expanduser().resolve()
+    mfa_root = Path(args.mfa_root).expanduser().resolve()
+    sample_filter = str(args.sample_id_contains or "")
+    gt_csv = Path(args.gt_csv).expanduser().resolve() if args.gt_csv else None
+
+    # Optional overlap ordering map.
+    overlap_map: Dict[Tuple[str, int], float] = {}
+    if args.diff_csv:
+        diff_csv = Path(args.diff_csv).expanduser().resolve()
+        if diff_csv.exists():
+            with diff_csv.open("r", encoding="utf-8", newline="") as f:
+                for r in csv.DictReader(f):
+                    sid = _norm(r.get("sample_id"))
+                    try:
+                        rid = int(_norm(r.get("region_id")))
+                    except Exception:
+                        continue
+                    try:
+                        ov = float(_norm(r.get("overlap_pixels")))
+                    except Exception:
+                        ov = -1.0
+                    overlap_map[(sid, rid)] = ov
+
+    rows_by_pair: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    ids_by_sid: "OrderedDict[str, List[int]]" = OrderedDict()
+    transcript_by_sid: Dict[str, str] = {}
+
+    with src.open("r", encoding="utf-8", newline="") as f:
+        for r in csv.DictReader(f):
+            k = _pair_key(r)
+            if not k:
+                continue
+            sid, rid = k
+            if sample_filter and sample_filter not in sid:
+                continue
+
+            rows_by_pair[(sid, rid)] = r
+
+            t = _to_one_line(_norm(r.get("transcript")))
+            if t and sid not in transcript_by_sid:
+                transcript_by_sid[sid] = t
+
+    # ID source:
+    # - default: input csv rows
+    # - if --gt-csv provided: use GT csv IDs/order source, and still pull fields from input csv rows.
+    if gt_csv and gt_csv.exists():
+        with gt_csv.open("r", encoding="utf-8", newline="") as f:
+            for r in csv.DictReader(f):
+                sid = _norm(r.get("sample_id"))
+                if sample_filter and sample_filter not in sid:
+                    continue
+                try:
+                    rid = int(_norm(r.get("region_id")))
+                except Exception:
+                    continue
+                ids_by_sid.setdefault(sid, [])
+                if rid not in ids_by_sid[sid]:
+                    ids_by_sid[sid].append(rid)
+    else:
+        for sid, rid in rows_by_pair.keys():
+            ids_by_sid.setdefault(sid, [])
+            if rid not in ids_by_sid[sid]:
+                ids_by_sid[sid].append(rid)
+
+    out: List[Dict[str, Any]] = []
+    for sid, ids in ids_by_sid.items():
+        if len(ids) < 3:
+            continue
+
+        if overlap_map:
+            ids = sorted(ids, key=lambda rid: (-overlap_map.get((sid, rid), -1.0), rid))[:3]
+        else:
+            ids = ids[:3]
+
+        if not all((sid, rid) in rows_by_pair for rid in ids):
+            continue
+        ordered_rows = [rows_by_pair[(sid, rid)] for rid in ids]
+
+        tuples = []
+        ok = True
+        for r in ordered_rows:
+            rid = _norm(r.get("region_id"))
+            t = _norm(r.get("T"))
+            fband = _norm(r.get("F"))
+            p = _norm(r.get("P_type"))
+            en_raw = _norm(r.get("refined_explanation")) or _norm(r.get("output_explanation")) or _norm(r.get("En"))
+            en = _normalize_explanation(en_raw)
+            if not (rid and t and fband and p and en):
+                ok = False
+                break
+            tuples.append(f'(Cn={rid}, T={t}, F={fband}, P={p}, En="{en}")')
+        if not ok:
+            continue
+
+        prompt1_output = f"[{', '.join(map(str, ids))}]"
+        transcript = transcript_by_sid.get(sid) or _extract_transcript_word_tier_like_qwen_region(mfa_root, sid)
+        transcript = _to_one_line(transcript)
+        user_text = HARDCODED_QUERY2_USER_TEMPLATE.format(
+            prompt1_output=prompt1_output,
+            transcript=transcript,
+        )
+
+        out.append(
+            {
+                "sample_id": sid,
+                "prompt1_output": prompt1_output,
+                "transcript": transcript,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": str((spec_root / f"{sid}_grid_img_edge_number_axes.png").as_posix())},
+                            {"type": "text", "text": user_text},
+                        ],
+                    }
+                ],
+                "gt_prompt2": "; ".join(tuples),
+            }
+        )
+    return out
+
+
+def _build_from_json(args: argparse.Namespace) -> List[Dict[str, Any]]:
+    src = Path(args.input_json).expanduser().resolve()
     data = json.loads(src.read_text(encoding="utf-8-sig"))
 
     out: List[Dict[str, Any]] = []
@@ -110,10 +289,49 @@ def main():
             if k in item:
                 row[k] = item[k]
         out.append(row)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input-json", required=True)
+    ap.add_argument("--output-json", required=True)
+    ap.add_argument(
+        "--input-format",
+        choices=["auto", "json", "csv"],
+        default="auto",
+        help="auto: infer from file suffix; csv: build grouped prompt2 rows from region-level CSV.",
+    )
+    ap.add_argument("--diff-csv", default="", help="Optional CSV with overlap_pixels for ordering top3 region IDs.")
+    ap.add_argument(
+        "--gt-csv",
+        default="",
+        help="Optional GT CSV used as source of sample_id/region_id triplets. "
+        "When set, top3 IDs come from this file (then optionally overlap-ordered by --diff-csv).",
+    )
+    ap.add_argument("--spec-root", default=DEFAULT_SPEC_ROOT, help="Spectrogram grid image root.")
+    ap.add_argument("--mfa-root", default=DEFAULT_MFA_ROOT, help="MFA JSON root.")
+    ap.add_argument(
+        "--sample-id-contains",
+        default="_LA_T_",
+        help="When input is csv, keep only sample_ids containing this substring; empty disables filter.",
+    )
+    args = ap.parse_args()
+
+    dst = Path(args.output_json).expanduser().resolve()
+    src = Path(args.input_json).expanduser().resolve()
+    in_fmt = args.input_format
+    if in_fmt == "auto":
+        in_fmt = "csv" if src.suffix.lower() == ".csv" else "json"
+
+    if in_fmt == "csv":
+        out = _build_from_csv(args)
+    else:
+        out = _build_from_json(args)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"saved: {dst} (n={len(out)})")
+    print(f"saved: {dst} (n={len(out)}, input_format={in_fmt})")
 
 
 if __name__ == "__main__":
