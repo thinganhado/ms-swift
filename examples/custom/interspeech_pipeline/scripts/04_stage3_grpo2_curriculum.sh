@@ -8,7 +8,22 @@ GRPO2_PRED_JSON_IN="${GRPO2_PRED_JSON_IN:-/datasets/work/dss-deepfake-audio/work
 GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json}"
 GRPO2_PRED_JSON_SWIFT="${GRPO2_PRED_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred_swift_grpo2.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
-SYSTEM_PROMPT_FILE="${SYSTEM_PROMPT_FILE:-/scratch3/che489/Ha/interspeech/VLM/Qwen3-VL/query2_prompts/query2_system.txt}"
+SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
+
+You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
+For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+
+OUTPUT FORMAT (must follow exactly):
+(Cn=ID1, T=..., F=..., P=..., En=\"...\"); (Cn=ID2, T=..., F=..., P=..., En=\"...\"); (Cn=ID3, T=..., F=..., P=..., En=\"...\")
+
+Field definitions:
+- Cn: region_id
+- T: one of {speech, non-speech}
+- F: one of {low, mid, high}
+- P: one of {consonant, vowel, unvoiced}
+- En: textual description, must be enclosed in double quotes.
+
+Do not output any other text outside the three tuples.}"
 
 WARMUP_EPOCHS="${WARMUP_EPOCHS:-1}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-3}"
@@ -25,7 +40,7 @@ SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
 COMMON_ARGS=(
   --rlhf_type grpo
   --model "${MODEL_ID}"
-  --system "${SYSTEM_PROMPT_FILE}"
+  --system "${SYSTEM_PROMPT}"
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py
   --reward_funcs external_interspeech_p2
   --use_vllm "${USE_VLLM}"

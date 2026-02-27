@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+HARDCODED_QUERY2_USER_TEMPLATE = (
+    "Explain the spoof artifact for each of the three selected region IDs in "
+    "{prompt1_output} . This is the transcript for context: {transcript}"
+)
+
 
 def _map_role(role: str) -> str:
     role = str(role or "").lower()
@@ -49,9 +54,14 @@ def _extract_image(item: Dict[str, Any], user_msg: Dict[str, Any]) -> Optional[s
     return None
 
 
-def _build_user_message(user_msg: Dict[str, Any], image: Optional[str]) -> Dict[str, Any]:
+def _build_user_message(item: Dict[str, Any], user_msg: Dict[str, Any], image: Optional[str]) -> Dict[str, Any]:
     role = _map_role(user_msg.get("role", user_msg.get("from", "")))
-    text = _extract_text(user_msg)
+    prompt1_output = str(item.get("prompt1_output", "")).strip()
+    transcript = str(item.get("transcript", "")).strip()
+    text = HARDCODED_QUERY2_USER_TEMPLATE.format(
+        prompt1_output=prompt1_output,
+        transcript=transcript,
+    )
     if image:
         return {
             "role": "user",
@@ -93,7 +103,7 @@ def main():
         if not gt:
             continue
         row = {
-            "messages": [_build_user_message(user_msg, image)],
+            "messages": [_build_user_message(item, user_msg, image)],
             "gt_prompt2": gt,
         }
         for k in ("sample_id", "sample_id_raw", "id", "prompt1_output", "transcript"):
@@ -108,4 +118,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
