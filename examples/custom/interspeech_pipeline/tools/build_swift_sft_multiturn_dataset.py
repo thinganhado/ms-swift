@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _map_role(role: str) -> str:
@@ -28,6 +28,29 @@ def _extract_image_path(item: Dict[str, Any], user_content: Any) -> Optional[str
     return None
 
 
+def _extract_text_only(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                texts.append(str(part.get("text", "")))
+        return "\n".join([t for t in texts if t]).strip()
+    return str(content or "")
+
+
+def _extract_message_image(msg: Dict[str, Any]) -> Optional[str]:
+    c = msg.get("content", msg.get("value", ""))
+    if isinstance(c, list):
+        for part in c:
+            if isinstance(part, dict) and part.get("type") == "image":
+                img = part.get("image")
+                if isinstance(img, str) and img.strip():
+                    return img.strip()
+    return None
+
+
 def _norm_message_content(msg: Dict[str, Any], image_path: Optional[str]) -> Dict[str, Any]:
     role = _map_role(msg.get("role", msg.get("from", "")))
     content = msg.get("content", msg.get("value", ""))
@@ -47,32 +70,138 @@ def _norm_message_content(msg: Dict[str, Any], image_path: Optional[str]) -> Dic
     return {"role": role, "content": text}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input-json", required=True)
-    ap.add_argument("--output-json", required=True)
-    args = ap.parse_args()
+def _assistant_text_message(text: str) -> Dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": [{"type": "text", "text": str(text or "").strip()}],
+    }
 
-    src = Path(args.input_json).expanduser().resolve()
-    dst = Path(args.output_json).expanduser().resolve()
 
-    data = json.loads(src.read_text(encoding="utf-8-sig"))
+def _load_json(path: Path) -> List[Dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, list):
+        raise ValueError(f"Expected list JSON in {path}")
+    return [x for x in data if isinstance(x, dict)]
+
+
+def _make_join_keys(sample_id: str, image_path: Optional[str]) -> List[Tuple[str, str]]:
+    keys: List[Tuple[str, str]] = []
+    sid = str(sample_id or "").strip()
+    img = str(image_path or "").strip()
+    if img:
+        keys.append(("image", img))
+    if sid:
+        keys.append(("sample_id", sid))
+    return keys
+
+
+def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    q2_index: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for item in q2_data:
+        conv = item.get("messages") or item.get("conversations")
+        if not isinstance(conv, list) or len(conv) < 1:
+            continue
+        gt_prompt2 = str(item.get("gt_prompt2", "")).strip()
+        if not gt_prompt2:
+            continue
+        user2 = conv[0]
+        img2 = _extract_message_image(user2) or str(item.get("image", item.get("img_path", item.get("p1", "")))).strip()
+        sid2 = str(item.get("sample_id", "")).strip()
+        for k in _make_join_keys(sid2, img2):
+            if k not in q2_index:
+                q2_index[k] = item
+
     out: List[Dict[str, Any]] = []
-
-    for idx, item in enumerate(data):
+    for item in q1_data:
         conv = item.get("messages") or item.get("conversations")
         if not isinstance(conv, list) or len(conv) < 2:
             continue
 
-        first = conv[0]
-        image_path = _extract_image_path(item, first.get("content", first.get("value")))
-        messages = [_norm_message_content(m, image_path if i == 0 else None) for i, m in enumerate(conv)]
+        user1 = conv[0]
+        assistant1 = conv[1]
 
-        rec: Dict[str, Any] = {"messages": messages}
-        for key in ("sample_id", "sample_id_raw", "id"):
-            if key in item:
+        # Query1 target must exist.
+        assistant1_text = _extract_text_only(assistant1.get("content", assistant1.get("value", ""))).strip()
+        if not assistant1_text:
+            continue
+
+        sid1 = str(item.get("sample_id", "")).strip()
+        img1 = _extract_message_image(user1) or _extract_image_path(item, user1.get("content", user1.get("value", "")))
+
+        q2_item = None
+        for k in _make_join_keys(sid1, img1):
+            q2_item = q2_index.get(k)
+            if q2_item is not None:
+                break
+        if q2_item is None:
+            continue
+
+        q2_conv = q2_item.get("messages") or q2_item.get("conversations")
+        if not isinstance(q2_conv, list) or len(q2_conv) < 1:
+            continue
+        user2 = q2_conv[0]
+        gt_prompt2 = str(q2_item.get("gt_prompt2", "")).strip()
+        if not gt_prompt2:
+            continue
+
+        # Keep both turns multimodal/text exactly as builders provide.
+        msg_user1 = _norm_message_content(user1, img1)
+        msg_assistant1 = _norm_message_content(assistant1, None)
+        msg_user2 = _norm_message_content(user2, _extract_message_image(user2))
+        msg_assistant2 = _assistant_text_message(gt_prompt2)
+
+        rec: Dict[str, Any] = {
+            "messages": [msg_user1, msg_assistant1, msg_user2, msg_assistant2],
+            "sample_id": str(q2_item.get("sample_id", sid1 or "")),
+        }
+        for key in ("sample_id_raw", "id", "prompt1_output", "transcript", "gt_prompt2"):
+            if key in q2_item:
+                rec[key] = q2_item[key]
+            elif key in item and key not in rec:
                 rec[key] = item[key]
         out.append(rec)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input-json", default="", help="Legacy single-source mode.")
+    ap.add_argument("--q1-json", default="", help="Query1 builder output JSON.")
+    ap.add_argument("--q2-json", default="", help="Prompt2 builder output JSON (GT-based).")
+    ap.add_argument("--output-json", required=True)
+    args = ap.parse_args()
+
+    dst = Path(args.output_json).expanduser().resolve()
+    out: List[Dict[str, Any]]
+
+    if args.q1_json and args.q2_json:
+        q1_path = Path(args.q1_json).expanduser().resolve()
+        q2_path = Path(args.q2_json).expanduser().resolve()
+        q1_data = _load_json(q1_path)
+        q2_data = _load_json(q2_path)
+        out = _build_from_two_sources(q1_data, q2_data)
+        print(f"mode: two-source (q1={q1_path}, q2={q2_path})")
+    else:
+        if not args.input_json:
+            raise ValueError("Provide either --input-json (legacy) or both --q1-json and --q2-json.")
+        src = Path(args.input_json).expanduser().resolve()
+        data = _load_json(src)
+        out = []
+        for item in data:
+            conv = item.get("messages") or item.get("conversations")
+            if not isinstance(conv, list) or len(conv) < 2:
+                continue
+
+            first = conv[0]
+            image_path = _extract_image_path(item, first.get("content", first.get("value")))
+            messages = [_norm_message_content(m, image_path if i == 0 else None) for i, m in enumerate(conv)]
+
+            rec: Dict[str, Any] = {"messages": messages}
+            for key in ("sample_id", "sample_id_raw", "id"):
+                if key in item:
+                    rec[key] = item[key]
+            out.append(rec)
+        print(f"mode: legacy single-source (input={src})")
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -81,4 +210,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
