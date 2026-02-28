@@ -167,7 +167,7 @@ def main():
         rows = [union_index[(sid, rid)] for rid in ids]
         tuples = []
         ok = True
-        for r in rows:
+        for idx, r in enumerate(rows, start=1):
             rid = norm(r.get("region_id"))
             t = norm(r.get("T"))
             fband = norm(r.get("F"))
@@ -177,7 +177,7 @@ def main():
             if not (rid and t and fband and p and en):
                 ok = False
                 break
-            tuples.append(f'(Cn={rid}, T={t}, F={fband}, P={p}, En="{en}")')
+            tuples.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}="{en}")')
         if not ok:
             missing_fields += 1
             continue
