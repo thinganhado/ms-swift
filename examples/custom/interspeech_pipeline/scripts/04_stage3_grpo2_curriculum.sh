@@ -40,6 +40,7 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 USE_VLLM="${USE_VLLM:-true}"
 VLLM_MODE="${VLLM_MODE:-colocate}"
 VLLM_TP="${VLLM_TP:-1}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
 SLEEP_LEVEL="${SLEEP_LEVEL:-1}"
 INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD:-0}"
 INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES:-8}"
@@ -52,6 +53,7 @@ echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
 echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
 echo "[run] RUN_TAG=${RUN_TAG}"
 echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
+echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
 
 COMMON_ARGS=(
   --rlhf_type grpo
@@ -62,6 +64,7 @@ COMMON_ARGS=(
   --use_vllm "${USE_VLLM}"
   --vllm_mode "${VLLM_MODE}"
   --vllm_tensor_parallel_size "${VLLM_TP}"
+  --vllm_gpu_memory_utilization "${VLLM_GPU_MEMORY_UTILIZATION}"
   --sleep_level "${SLEEP_LEVEL}"
   --beta 0.1
   --num_generations 4
