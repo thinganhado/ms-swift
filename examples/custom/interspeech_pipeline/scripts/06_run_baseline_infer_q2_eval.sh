@@ -10,7 +10,7 @@ if command -v conda >/dev/null 2>&1; then
 fi
 
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen2.5-VL-7B-Instruct/}"
-META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt.json}"
+META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val.json}"
 OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-eval/}"
 RUN_TAG="${RUN_TAG:-q2_eval_$(date +%Y%m%d_%H%M%S)}"
 INFER_BACKEND="${INFER_BACKEND:-transformers}"
@@ -239,7 +239,7 @@ def _normalize_time(value):
     v = low(value)
     if v in TIME_LABELS:
         return v
-    if v in {"nonspeech", "non speech"}:
+    if v in {"nonspeech", "non speech", "non_speech"}:
         return "non-speech"
     return None
 
