@@ -169,6 +169,13 @@ def _extract_q1_target(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str:
     return ""
 
 
+def _format_q1_target_as_array(text: str) -> str:
+    ids = _extract_ints(text)[:3]
+    if ids:
+        return f"[{', '.join(map(str, ids))}]"
+    return str(text or "").strip()
+
+
 def _extract_ints(text: str) -> List[int]:
     return [int(x) for x in re.findall(r"\d+", str(text or ""))]
 
@@ -329,6 +336,7 @@ def _build_from_two_sources(
         assistant1_text = _extract_q1_target(item, conv)
         if not assistant1_text:
             continue
+        assistant1_text = _format_q1_target_as_array(assistant1_text)
 
         sid1 = str(item.get("sample_id", "")).strip()
         img1 = _extract_message_image(user1) or _extract_image_path(item, user1.get("content", user1.get("value", "")))
