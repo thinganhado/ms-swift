@@ -395,8 +395,8 @@ def main():
     ap.add_argument("--mfa-root", default=DEFAULT_MFA_ROOT, help="MFA JSON root.")
     ap.add_argument(
         "--sample-id-contains",
-        default="_LA_T_",
-        help="When input is csv, keep only sample_ids containing this substring; empty disables filter.",
+        default="",
+        help="When input is csv, keep only sample_ids containing this substring; default keeps all sample_ids.",
     )
     args = ap.parse_args()
 
