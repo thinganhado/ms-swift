@@ -99,8 +99,8 @@ class InterspeechPrompt1Reward(ORM):
       R = 1.0 * nDCG@3 + 0.5 * hit + 0.1 * format
     """
 
-    W_NDCG = 1.0
-    W_HIT = 0.5
+    W_NDCG = 0.3
+    W_HIT = 1.0
     W_FORMAT = 0.1
 
     def __init__(self):
