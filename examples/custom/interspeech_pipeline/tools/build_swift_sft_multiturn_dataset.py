@@ -95,6 +95,17 @@ def _make_join_keys(sample_id: str, image_path: Optional[str]) -> List[Tuple[str
     return keys
 
 
+def _extract_q1_target(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str:
+    # Prompt1 GRPO builder stores the target in metadata, not as an assistant turn.
+    for key in ("gt_regions", "assistant", "prompt1_target"):
+        value = str(item.get(key, "")).strip()
+        if value:
+            return value
+    if len(conv) >= 2:
+        return _extract_text_only(conv[1].get("content", conv[1].get("value", ""))).strip()
+    return ""
+
+
 def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     q2_index: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for item in q2_data:
@@ -114,14 +125,11 @@ def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[st
     out: List[Dict[str, Any]] = []
     for item in q1_data:
         conv = item.get("messages") or item.get("conversations")
-        if not isinstance(conv, list) or len(conv) < 2:
+        if not isinstance(conv, list) or len(conv) < 1:
             continue
 
         user1 = conv[0]
-        assistant1 = conv[1]
-
-        # Query1 target must exist.
-        assistant1_text = _extract_text_only(assistant1.get("content", assistant1.get("value", ""))).strip()
+        assistant1_text = _extract_q1_target(item, conv)
         if not assistant1_text:
             continue
 
@@ -146,7 +154,7 @@ def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[st
 
         # Keep both turns multimodal/text exactly as builders provide.
         msg_user1 = _norm_message_content(user1, img1)
-        msg_assistant1 = _norm_message_content(assistant1, None)
+        msg_assistant1 = _assistant_text_message(assistant1_text)
         msg_user2 = _norm_message_content(user2, _extract_message_image(user2))
         msg_assistant2 = _assistant_text_message(gt_prompt2)
 
