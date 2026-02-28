@@ -33,6 +33,7 @@ WARMUP_EPOCHS="${WARMUP_EPOCHS:-1}"
 TOTAL_EPOCHS="${TOTAL_EPOCHS:-3}"
 WARMUP_MAX_STEPS="${WARMUP_MAX_STEPS:-120}"
 TOTAL_MAX_STEPS="${TOTAL_MAX_STEPS:-360}"
+USE_PRED_PHASE="${USE_PRED_PHASE:-1}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
@@ -50,6 +51,7 @@ mkdir -p "${OUTPUT_DIR}"
 echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
 echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
 echo "[run] RUN_TAG=${RUN_TAG}"
+echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
 
 COMMON_ARGS=(
   --rlhf_type grpo
@@ -92,29 +94,47 @@ COMMON_ARGS=(
 )
 
 # ===== Build GRPO2 datasets =====
-python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
-  --input-json "${GRPO2_PRED_JSON_IN}" \
-  --output-json "${GRPO2_PRED_JSON_SWIFT}"
+if [[ "${USE_PRED_PHASE}" == "1" ]]; then
+  python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
+    --input-json "${GRPO2_PRED_JSON_IN}" \
+    --output-json "${GRPO2_PRED_JSON_SWIFT}"
+fi
 
 python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
   --input-json "${GRPO2_GT_JSON_IN}" \
   --output-json "${GRPO2_GT_JSON_SWIFT}"
 
-# ===== Phase 1: warmup on pred =====
-NPROC_PER_NODE="${NPROC_PER_NODE}" \
-CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
-INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD}" \
-INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES}" \
-INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS}" \
-INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE}" \
-GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH}" \
-swift rlhf \
-  "${COMMON_ARGS[@]}" \
-  --dataset "${GRPO2_PRED_JSON_SWIFT}" \
-  --num_train_epochs "${WARMUP_EPOCHS}" \
-  --max_steps "${WARMUP_MAX_STEPS}"
+if [[ "${USE_PRED_PHASE}" == "1" ]]; then
+  # ===== Phase 1: warmup on pred =====
+  NPROC_PER_NODE="${NPROC_PER_NODE}" \
+  CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
+  INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD}" \
+  INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES}" \
+  INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS}" \
+  INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE}" \
+  GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH}" \
+  swift rlhf \
+    "${COMMON_ARGS[@]}" \
+    --dataset "${GRPO2_PRED_JSON_SWIFT}" \
+    --num_train_epochs "${WARMUP_EPOCHS}" \
+    --max_steps "${WARMUP_MAX_STEPS}"
+fi
 
-# ===== Phase 2: continue on GT =====
+if [[ "${USE_PRED_PHASE}" == "1" ]]; then
+  # ===== Phase 2: continue on GT =====
+  GT_PHASE_EXTRA_ARGS=(
+    --resume_from_checkpoint true
+    --num_train_epochs "${TOTAL_EPOCHS}"
+    --max_steps "${TOTAL_MAX_STEPS}"
+  )
+else
+  # ===== GT-only mode =====
+  GT_PHASE_EXTRA_ARGS=(
+    --num_train_epochs "${TOTAL_EPOCHS}"
+    --max_steps "${TOTAL_MAX_STEPS}"
+  )
+fi
+
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD}" \
@@ -125,6 +145,4 @@ GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH}" \
 swift rlhf \
   "${COMMON_ARGS[@]}" \
   --dataset "${GRPO2_GT_JSON_SWIFT}" \
-  --resume_from_checkpoint true \
-  --num_train_epochs "${TOTAL_EPOCHS}" \
-  --max_steps "${TOTAL_MAX_STEPS}"
+  "${GT_PHASE_EXTRA_ARGS[@]}"
