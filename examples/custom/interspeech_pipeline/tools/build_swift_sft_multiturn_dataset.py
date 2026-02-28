@@ -349,6 +349,7 @@ def _build_from_two_sources(
         if not gt_prompt2:
             continue
 
+        q1_ids = _extract_ints(assistant1_text)[:3]
         user2_text, gt_prompt2 = _reorder_q2_by_q1(assistant1_text, q2_item, user2, gt_prompt2)
 
         # Keep both turns multimodal/text exactly as builders provide.
@@ -374,6 +375,9 @@ def _build_from_two_sources(
                 rec[key] = q2_item[key]
             elif key in item and key not in rec:
                 rec[key] = item[key]
+        if len(q1_ids) == 3:
+            rec["prompt1_output"] = f"[{', '.join(map(str, q1_ids))}]"
+        rec["gt_prompt2"] = gt_prompt2
         out.append(rec)
     return out
 
