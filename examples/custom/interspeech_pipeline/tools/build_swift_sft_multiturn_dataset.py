@@ -137,13 +137,46 @@ def _extract_ints(text: str) -> List[int]:
     return [int(x) for x in re.findall(r"\d+", str(text or ""))]
 
 
+def _split_top_level_tuples(text: str) -> List[str]:
+    s = str(text or "")
+    out: List[str] = []
+    start: Optional[int] = None
+    depth = 0
+    in_quote = False
+    escape = False
+
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_quote:
+            escape = True
+            continue
+        if ch == '"':
+            in_quote = not in_quote
+            continue
+        if in_quote:
+            continue
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    out.append(s[start:i + 1].strip())
+                    start = None
+    return out
+
+
 def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict[str, Any], gt_prompt2: str) -> Tuple[str, str]:
     q1_ids = _extract_ints(assistant1_text)
     if len(q1_ids) < 3:
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
     q1_ids = q1_ids[:3]
 
-    tuple_matches = re.findall(r"\((.*?)\)", str(gt_prompt2 or ""))
+    tuple_matches = _split_top_level_tuples(gt_prompt2)
     if len(tuple_matches) < 3:
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
 
@@ -153,7 +186,7 @@ def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict
         if not m:
             continue
         cn = int(m.group(1))
-        tuples_by_cn[cn] = f"({raw.strip()})"
+        tuples_by_cn[cn] = raw.strip()
 
     if not all(cn in tuples_by_cn for cn in q1_ids):
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
