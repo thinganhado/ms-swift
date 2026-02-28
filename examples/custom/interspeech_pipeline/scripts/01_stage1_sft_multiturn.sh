@@ -8,9 +8,25 @@ SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/da
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_mt_lora_Qwen3-VL-8B-Instruct}"
 SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
 SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-3}"
+CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
+TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_mt}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+
+mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
+  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" "${TMPDIR_BASE}"
+
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
+export HF_HOME="${CACHE_ROOT}/hf"
+export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
+export TMPDIR="${TMPDIR_BASE}"
+unset TRANSFORMERS_CACHE
 
 # ===== Convert to Swift messages format =====
 python examples/custom/interspeech_pipeline/tools/build_swift_sft_multiturn_dataset.py \
