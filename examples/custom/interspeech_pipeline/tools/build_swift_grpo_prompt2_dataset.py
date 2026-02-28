@@ -44,6 +44,80 @@ def _extract_text(msg: Dict[str, Any]) -> str:
     return str(c or "")
 
 
+def _split_top_level_tuples(text: str) -> List[str]:
+    s = str(text or "")
+    out: List[str] = []
+    start: Optional[int] = None
+    depth = 0
+    in_quote = False
+    escape = False
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_quote = not in_quote
+            continue
+        if in_quote:
+            continue
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    out.append(s[start:i + 1].strip())
+                    start = None
+    return out
+
+
+def _strip_outer_parens(s: str) -> str:
+    x = str(s or "").strip()
+    if len(x) >= 2 and x[0] == "(" and x[-1] == ")":
+        return x[1:-1].strip()
+    return x
+
+
+def _normalize_gt_prompt2_no_cn(text: str) -> str:
+    tuples = _split_top_level_tuples(text)
+    if not tuples:
+        return str(text or "").strip()
+
+    out: List[str] = []
+    for tup in tuples:
+        body = _strip_outer_parens(tup)
+
+        m_t = re.search(r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
+        m_f = re.search(r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
+        m_p = re.search(r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
+        m_en = re.search(r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL)
+        if m_t and m_f and m_p and m_en:
+            t = m_t.group(1).strip()
+            fband = m_f.group(1).strip()
+            p = m_p.group(1).strip()
+            en = m_en.group(1).strip()
+            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            continue
+
+        parts = [p.strip() for p in body.split(",", 4)]
+        if len(parts) == 5:
+            _, t, fband, p, en = parts
+            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            continue
+        if len(parts) == 4:
+            t, fband, p, en = parts
+            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            continue
+
+        out.append(tup.strip())
+    return "; ".join(out)
+
+
 def _extract_image(item: Dict[str, Any], user_msg: Dict[str, Any]) -> Optional[str]:
     for k in ("image", "img_path", "p1"):
         v = item.get(k)
@@ -81,9 +155,9 @@ def _build_user_message(item: Dict[str, Any], user_msg: Dict[str, Any], image: O
 def _extract_gt_prompt2(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str:
     for k in ("gt_prompt2", "prompt2_target", "assistant"):
         if k in item and str(item[k]).strip():
-            return str(item[k]).strip()
+            return _normalize_gt_prompt2_no_cn(str(item[k]).strip())
     if len(conv) >= 2:
-        return _extract_text(conv[1])
+        return _normalize_gt_prompt2_no_cn(_extract_text(conv[1]))
     return ""
 
 
@@ -235,7 +309,7 @@ def _build_from_csv(args: argparse.Namespace) -> List[Dict[str, Any]]:
             if not (rid and t and fband and p and en):
                 ok = False
                 break
-            tuples.append(f'(Cn={rid}, T={t}, F={fband}, P={p}, En="{en}")')
+            tuples.append(f'(T={t}, F={fband}, P={p}, En="{en}")')
         if not ok:
             continue
 

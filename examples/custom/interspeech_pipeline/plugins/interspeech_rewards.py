@@ -295,7 +295,6 @@ def _norm_phon(v: str) -> Optional[str]:
     return None
 
 
-_TUPLE_OUTER_PATTERN = re.compile(r"\((.*?)\)", flags=re.DOTALL)
 _CN_PATTERN = re.compile(r"\bcn\s*=\s*(\d+)\b", flags=re.IGNORECASE)
 _T_PATTERN = re.compile(r"\bt\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
 _F_PATTERN = re.compile(r"\bf\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
@@ -310,45 +309,94 @@ def _strip_wrapped_quotes(s: str) -> str:
     return x
 
 
-def _parse_region_tuples(text: str) -> Optional[List[Dict[str, object]]]:
-    raw_tuples = _TUPLE_OUTER_PATTERN.findall(str(text or ""))
+def _split_top_level_tuples(text: str) -> List[str]:
+    s = str(text or "")
+    out: List[str] = []
+    start = None
+    depth = 0
+    in_quote = False
+    escape = False
+    for i, ch in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_quote = not in_quote
+            continue
+        if in_quote:
+            continue
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    out.append(s[start:i + 1].strip())
+                    start = None
+    return out
+
+
+def _parse_region_tuples(text: str, expected_ids: Optional[Sequence[int]] = None) -> Optional[List[Dict[str, object]]]:
+    raw_tuples = _split_top_level_tuples(text)
     if len(raw_tuples) != 3:
         return None
 
     rows: List[Dict[str, object]] = []
-    for raw in raw_tuples:
-        body = str(raw or "").strip()
+    for idx, raw in enumerate(raw_tuples):
+        body = _strip_wrapped_quotes(str(raw or "").strip())
+        if body.startswith("(") and body.endswith(")"):
+            body = body[1:-1].strip()
         cn_raw = ""
         t_raw = ""
         f_raw = ""
         p_raw = ""
         en_raw = ""
+        has_explicit_cn = False
 
         # Preferred: keyed format
-        # (Cn=1, T=speech, F=mid, P=vowel, En="...")
+        # Legacy keyed format: (Cn=1, T=speech, F=mid, P=vowel, En="...")
+        # New keyed format:    (T=speech, F=mid, P=vowel, En="...")
         m_cn = _CN_PATTERN.search(body)
         m_t = _T_PATTERN.search(body)
         m_f = _F_PATTERN.search(body)
         m_p = _P_PATTERN.search(body)
         m_en = _EN_PATTERN.search(body)
-        if m_cn and m_t and m_f and m_p and m_en:
-            cn_raw = m_cn.group(1).strip()
+        if m_t and m_f and m_p and m_en:
+            if m_cn:
+                cn_raw = m_cn.group(1).strip()
+                has_explicit_cn = True
             t_raw = m_t.group(1).strip()
             f_raw = m_f.group(1).strip()
             p_raw = m_p.group(1).strip()
             en_raw = m_en.group(1).strip()
         else:
             # Backward-compatible positional format:
-            # (1, speech, mid, vowel, ...)
+            # (1, speech, mid, vowel, ...) or (speech, mid, vowel, ...)
             parts = [p.strip() for p in body.split(",", 4)]
             if len(parts) == 5:
                 cn_raw, t_raw, f_raw, p_raw, en_raw = parts
+                has_explicit_cn = True
+            elif len(parts) == 4:
+                t_raw, f_raw, p_raw, en_raw = parts
             else:
                 return None
 
-        try:
-            cn_i = int(cn_raw)
-        except Exception:
+        if has_explicit_cn:
+            try:
+                cn_i = int(cn_raw)
+            except Exception:
+                cn_i = -1
+        elif expected_ids is not None and idx < len(expected_ids):
+            try:
+                cn_i = int(expected_ids[idx])
+            except Exception:
+                cn_i = -1
+        else:
             cn_i = -1
         cn_ok = 1 <= cn_i <= 16
 
@@ -488,7 +536,19 @@ class InterspeechPrompt2Reward(ORM):
         prompt2_target,
         gt_regions,
         assistant,
+        prompt1_output,
     ) -> (set, Dict[str, Dict[str, object]]):
+        expected_ids: List[int] = []
+        for src in (prompt1_output, gt_regions, assistant):
+            if src is not None and i < len(src):
+                t = str(src[i] if src[i] is not None else "").strip()
+                if not t:
+                    continue
+                ids = [x for x in _parse_ids(t)[:3] if 1 <= int(x) <= 16]
+                if ids:
+                    expected_ids = ids
+                    break
+
         # Prefer full GT tuple source.
         gt_tuple_text = ""
         for src in (gt_prompt2, prompt2_target):
@@ -501,7 +561,7 @@ class InterspeechPrompt2Reward(ORM):
         gt_rows_by_cn: Dict[str, Dict[str, object]] = {}
         gt_ids: set = set()
         if gt_tuple_text:
-            gt_rows = _parse_region_tuples(gt_tuple_text)
+            gt_rows = _parse_region_tuples(gt_tuple_text, expected_ids=expected_ids)
             if gt_rows is not None:
                 for r in gt_rows:
                     cn = str(r.get("Cn", "")).strip()
@@ -512,15 +572,8 @@ class InterspeechPrompt2Reward(ORM):
                 return gt_ids, gt_rows_by_cn
 
         # Fallback for pred-phase: only GT IDs are needed to build overlap mask m_i.
-        for src in (gt_regions, assistant):
-            if src is not None and i < len(src):
-                t = str(src[i] if src[i] is not None else "").strip()
-                if not t:
-                    continue
-                ids = _parse_ids(t)[:3]
-                ids = [x for x in ids if 1 <= int(x) <= 16]
-                if ids:
-                    return set(ids), {}
+        if expected_ids:
+            return set(expected_ids), {}
         return set(), {}
 
     def __call__(
@@ -530,6 +583,7 @@ class InterspeechPrompt2Reward(ORM):
         assistant=None,
         prompt2_target=None,
         gt_regions=None,
+        prompt1_output=None,
         **kwargs,
     ) -> List[float]:
 
@@ -549,7 +603,18 @@ class InterspeechPrompt2Reward(ORM):
 
         debug_rows: List[Dict[str, object]] = []
         for i, completion in enumerate(completions):
-            pred_rows = _parse_region_tuples(completion)
+            expected_ids: List[int] = []
+            for src in (prompt1_output, gt_regions, assistant):
+                if src is not None and i < len(src):
+                    t = str(src[i] if src[i] is not None else "").strip()
+                    if not t:
+                        continue
+                    ids = [x for x in _parse_ids(t)[:3] if 1 <= int(x) <= 16]
+                    if ids:
+                        expected_ids = ids
+                        break
+
+            pred_rows = _parse_region_tuples(completion, expected_ids=expected_ids)
             if pred_rows is None:
                 rewards.append(0.0)
                 if len(debug_rows) < self._debug_print_samples:
@@ -573,6 +638,7 @@ class InterspeechPrompt2Reward(ORM):
                 prompt2_target=prompt2_target,
                 gt_regions=gt_regions,
                 assistant=assistant,
+                prompt1_output=prompt1_output,
             )
             if gt_by_cn:
                 gt_tuple_available += 1

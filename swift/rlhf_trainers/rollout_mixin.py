@@ -1124,6 +1124,29 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             return None
         return (cns[0], cns[1], cns[2])
 
+    @staticmethod
+    def _assistant_has_cn_tokens(messages: List[Dict[str, Any]]) -> bool:
+        if not messages:
+            return False
+        assistant_text = ''
+        for msg in reversed(messages):
+            if msg.get('role') != 'assistant':
+                continue
+            content = msg.get('content')
+            if isinstance(content, str):
+                assistant_text = content
+                break
+            if isinstance(content, list):
+                chunks = []
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        chunks.append(str(part.get('text', '')))
+                assistant_text = ''.join(chunks)
+                break
+        if not assistant_text:
+            return False
+        return bool(re.search(r'\bCn\s*=', str(assistant_text), flags=re.IGNORECASE))
+
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
         if not inputs:
@@ -1411,8 +1434,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     cur_valid = cur_triplet is not None
                     expected_cn_triplet = self._extract_prompt1_triplet_from_input(merged[idx])
                     cur_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
+                    cur_has_cn = self._assistant_has_cn_tokens(merged[idx].get('messages', []))
                     cur_cn_mismatch = (
                         self.grpo_p2_retry_cn_match
+                        and cur_has_cn
                         and expected_cn_triplet is not None
                         and (cur_cn_triplet is None or cur_cn_triplet != expected_cn_triplet)
                     )
@@ -1458,8 +1483,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         cand_triplet = self._extract_triplet_from_messages(candidate.get('messages', []))
                         cand_valid = cand_triplet is not None
                         cand_cn_triplet = self._extract_cn_triplet_from_messages(candidate.get('messages', []))
+                        cand_has_cn = self._assistant_has_cn_tokens(candidate.get('messages', []))
                         cand_cn_mismatch = (
                             self.grpo_p2_retry_cn_match
+                            and cand_has_cn
                             and expected_cn_triplet is not None
                             and (cand_cn_triplet is None or cand_cn_triplet != expected_cn_triplet)
                         )
@@ -1490,8 +1517,10 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         # This keeps subsequent rollouts from inheriting repeated non-hit IDs.
                         final_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
                         final_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
+                        final_has_cn = self._assistant_has_cn_tokens(merged[idx].get('messages', []))
                         final_cn_mismatch = (
                             self.grpo_p2_retry_cn_match
+                            and final_has_cn
                             and expected_cn_triplet is not None
                             and (final_cn_triplet is None or final_cn_triplet != expected_cn_triplet)
                         )

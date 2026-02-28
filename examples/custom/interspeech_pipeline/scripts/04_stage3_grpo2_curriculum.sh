@@ -9,19 +9,25 @@ GRPO2_GT_JSON_IN="${GRPO2_GT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/dat
 GRPO2_PRED_JSON_IN="${GRPO2_PRED_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred.json}"
 GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json}"
 GRPO2_PRED_JSON_SWIFT="${GRPO2_PRED_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred_swift_grpo2.json}"
+GRPO2_PRED_PREBUILT="${GRPO2_PRED_PREBUILT:-1}"
 OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
 RUN_TAG="${RUN_TAG:-v0-$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_DIR_BASE%/}/${RUN_TAG}}"
 SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
 
 You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
-For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+For each selected ID, in that same input order, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
 
 OUTPUT FORMAT (must follow exactly):
-(Cn=ID1, T=..., F=..., P=..., En=\"...\"); (Cn=ID2, T=..., F=..., P=..., En=\"...\"); (Cn=ID3, T=..., F=..., P=..., En=\"...\")
+(T=..., F=..., P=..., En=\"...\"); (T=..., F=..., P=..., En=\"...\"); (T=..., F=..., P=..., En=\"...\")
+
+Tuple alignment:
+- Tuple 1 corresponds to ID1
+- Tuple 2 corresponds to ID2
+- Tuple 3 corresponds to ID3
+- Do not repeat or print Cn / region IDs in the output tuples.
 
 Field definitions:
-- Cn: region_id
 - T: one of {speech, non-speech}
 - F: one of {low, mid, high}
 - P: one of {consonant, vowel, unvoiced}
@@ -46,7 +52,7 @@ INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD:-0}"
 INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES:-8}"
 INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS:-1}"
 INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE:-8}"
-GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH:-1}"
+GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH:-0}"
 
 mkdir -p "${OUTPUT_DIR}"
 echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
@@ -54,6 +60,7 @@ echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
 echo "[run] RUN_TAG=${RUN_TAG}"
 echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
 echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
+echo "[run] GRPO2_PRED_PREBUILT=${GRPO2_PRED_PREBUILT}"
 
 COMMON_ARGS=(
   --rlhf_type grpo
@@ -98,9 +105,14 @@ COMMON_ARGS=(
 
 # ===== Build GRPO2 datasets =====
 if [[ "${USE_PRED_PHASE}" == "1" ]]; then
-  python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
-    --input-json "${GRPO2_PRED_JSON_IN}" \
-    --output-json "${GRPO2_PRED_JSON_SWIFT}"
+  if [[ "${GRPO2_PRED_PREBUILT}" == "1" ]]; then
+    mkdir -p "$(dirname "${GRPO2_PRED_JSON_SWIFT}")"
+    cp -f "${GRPO2_PRED_JSON_IN}" "${GRPO2_PRED_JSON_SWIFT}"
+  else
+    python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
+      --input-json "${GRPO2_PRED_JSON_IN}" \
+      --output-json "${GRPO2_PRED_JSON_SWIFT}"
+  fi
 fi
 
 python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
