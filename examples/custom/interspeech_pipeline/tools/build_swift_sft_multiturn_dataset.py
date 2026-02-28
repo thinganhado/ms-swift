@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -132,6 +133,41 @@ def _extract_q1_target(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str:
     return ""
 
 
+def _extract_ints(text: str) -> List[int]:
+    return [int(x) for x in re.findall(r"\d+", str(text or ""))]
+
+
+def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict[str, Any], gt_prompt2: str) -> Tuple[str, str]:
+    q1_ids = _extract_ints(assistant1_text)
+    if len(q1_ids) < 3:
+        return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
+    q1_ids = q1_ids[:3]
+
+    tuple_matches = re.findall(r"\((.*?)\)", str(gt_prompt2 or ""))
+    if len(tuple_matches) < 3:
+        return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
+
+    tuples_by_cn: Dict[int, str] = {}
+    for raw in tuple_matches:
+        m = re.search(r"\bCn\s*=\s*(\d+)\b", raw)
+        if not m:
+            continue
+        cn = int(m.group(1))
+        tuples_by_cn[cn] = f"({raw.strip()})"
+
+    if not all(cn in tuples_by_cn for cn in q1_ids):
+        return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
+
+    prompt1_output = f"[{', '.join(map(str, q1_ids))}]"
+    transcript = str(q2_item.get("transcript", "")).strip()
+    user2_text = (
+        "Explain the spoof artifact for each of the three selected region IDs in "
+        f"{prompt1_output} . This is the transcript for context: {transcript}"
+    ).strip()
+    gt_prompt2_reordered = "; ".join([tuples_by_cn[cn] for cn in q1_ids])
+    return user2_text, gt_prompt2_reordered
+
+
 def _build_from_two_sources(
     q1_data: List[Dict[str, Any]],
     q2_data: List[Dict[str, Any]],
@@ -183,12 +219,20 @@ def _build_from_two_sources(
         if not gt_prompt2:
             continue
 
+        user2_text, gt_prompt2 = _reorder_q2_by_q1(assistant1_text, q2_item, user2, gt_prompt2)
+
         # Keep both turns multimodal/text exactly as builders provide.
         msg_system1 = _system_text_message(q1_system_prompt)
         msg_user1 = _norm_message_content(user1, img1)
         msg_assistant1 = _assistant_text_message(assistant1_text)
         msg_system2 = _system_text_message(q2_system_prompt)
-        msg_user2 = _norm_message_content(user2, _extract_message_image(user2))
+        msg_user2 = {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": _extract_message_image(user2)},
+                {"type": "text", "text": user2_text},
+            ],
+        } if _extract_message_image(user2) else {"role": "user", "content": user2_text}
         msg_assistant2 = _assistant_text_message(gt_prompt2)
 
         rec: Dict[str, Any] = {
