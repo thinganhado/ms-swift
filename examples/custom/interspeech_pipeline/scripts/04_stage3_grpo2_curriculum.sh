@@ -2,12 +2,16 @@
 set -euo pipefail
 
 # ===== User-settable =====
-MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-1-ms-swift/lr1e-5_r8_a32_lora_merged}"
+# Base model should be the GRPO1-merged (or multiturn-SFT-merged) checkpoint.
+# GRPO2 trains a NEW LoRA adapter on top of this fixed base model.
+BASE_MODEL_ID="${BASE_MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-1-ms-swift/lr1e-5_r8_a32_lora_merged}"
 GRPO2_GT_JSON_IN="${GRPO2_GT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt.json}"
 GRPO2_PRED_JSON_IN="${GRPO2_PRED_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred.json}"
 GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json}"
 GRPO2_PRED_JSON_SWIFT="${GRPO2_PRED_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred_swift_grpo2.json}"
-OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
+OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
+RUN_TAG="${RUN_TAG:-v0-$(date +%Y%m%d-%H%M%S)}"
+OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_DIR_BASE%/}/${RUN_TAG}}"
 SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
 
 You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
@@ -42,9 +46,14 @@ INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS:-1}"
 INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE:-8}"
 GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH:-1}"
 
+mkdir -p "${OUTPUT_DIR}"
+echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
+echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
+echo "[run] RUN_TAG=${RUN_TAG}"
+
 COMMON_ARGS=(
   --rlhf_type grpo
-  --model "${MODEL_ID}"
+  --model "${BASE_MODEL_ID}"
   --system "${SYSTEM_PROMPT}"
   --external_plugins examples/custom/interspeech_pipeline/plugins/interspeech_rewards.py
   --reward_funcs external_interspeech_p2
