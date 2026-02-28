@@ -3,7 +3,6 @@ set -euo pipefail
 
 # ===== User-settable =====
 MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/VLM/Qwen3-VL-8B-Instruct/}"
-SFT_JSON_IN="${SFT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/SFT_2turn/stage1_multiturn_train.json}"
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/SFT_2turn/stage1_multiturn_train_swift.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_mt_lora_Qwen3-VL-8B-Instruct}"
 SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
@@ -28,10 +27,11 @@ export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
 export TMPDIR="${TMPDIR_BASE}"
 unset TRANSFORMERS_CACHE
 
-# ===== Convert to Swift messages format =====
-python examples/custom/interspeech_pipeline/tools/build_swift_sft_multiturn_dataset.py \
-  --input-json "${SFT_JSON_IN}" \
-  --output-json "${SFT_JSON_SWIFT}"
+if [[ ! -f "${SFT_JSON_SWIFT}" ]]; then
+  echo "ERROR: dataset not found: ${SFT_JSON_SWIFT}"
+  echo "Build it first with examples/custom/interspeech_pipeline/tools/build_swift_sft_multiturn_dataset.py"
+  exit 1
+fi
 
 if [[ "${SFT_DEBUG_DATA}" == "1" ]]; then
   python - "${SFT_JSON_SWIFT}" "${SFT_DEBUG_SAMPLES}" <<'PY'
