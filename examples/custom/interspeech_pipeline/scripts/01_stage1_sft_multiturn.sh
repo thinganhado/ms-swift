@@ -6,6 +6,8 @@ MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 SFT_JSON_IN="${SFT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/SFT_2turn/stage1_multiturn_train.json}"
 SFT_JSON_SWIFT="${SFT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/SFT_2turn/stage1_multiturn_train_swift.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/baseline_SFT_ms_swift/stage1_mt_lora_Qwen3-VL-8B-Instruct}"
+SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
+SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-3}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
@@ -14,6 +16,49 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 python examples/custom/interspeech_pipeline/tools/build_swift_sft_multiturn_dataset.py \
   --input-json "${SFT_JSON_IN}" \
   --output-json "${SFT_JSON_SWIFT}"
+
+if [[ "${SFT_DEBUG_DATA}" == "1" ]]; then
+  python - "${SFT_JSON_SWIFT}" "${SFT_DEBUG_SAMPLES}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1]).expanduser().resolve()
+n_show = max(1, int(sys.argv[2]))
+data = json.loads(src.read_text(encoding="utf-8"))
+print(f"[mt_dbg] rows={len(data)}")
+
+def text_only(content):
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")).strip())
+        return " ".join([p for p in parts if p]).strip()
+    return str(content or "").strip()
+
+def has_image(content):
+    if not isinstance(content, list):
+        return False
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "image":
+            return True
+    return False
+
+for i, row in enumerate(data[:n_show]):
+    sid = row.get("sample_id", f"row_{i}")
+    print(f"[mt_dbg] sample={i} sample_id={sid}")
+    for j, msg in enumerate(row.get("messages", [])):
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        txt = text_only(content).replace("\n", " ")
+        if len(txt) > 220:
+            txt = txt[:220] + "..."
+        print(f"[mt_dbg]   turn={j} role={role} has_image={has_image(content)} text={txt!r}")
+PY
+fi
 
 # ===== Train =====
 NPROC_PER_NODE="${NPROC_PER_NODE}" \
