@@ -352,11 +352,10 @@ def _build_from_two_sources(
         q1_ids = _extract_ints(assistant1_text)[:3]
         user2_text, gt_prompt2 = _reorder_q2_by_q1(assistant1_text, q2_item, user2, gt_prompt2)
 
-        # Keep both turns multimodal/text exactly as builders provide.
-        msg_system1 = _system_text_message(q1_system_prompt)
-        msg_user1 = _norm_message_content(user1, img1)
+        # Emit the final training-ready 4-turn structure directly:
+        # system prompts are folded into the corresponding user turns.
+        msg_user1 = _prepend_text_to_message(_norm_message_content(user1, img1), q1_system_prompt)
         msg_assistant1 = _assistant_text_message(assistant1_text)
-        msg_system2 = _system_text_message(q2_system_prompt)
         msg_user2 = {
             "role": "user",
             "content": [
@@ -364,10 +363,11 @@ def _build_from_two_sources(
                 {"type": "text", "text": user2_text},
             ],
         } if _extract_message_image(user2) else {"role": "user", "content": user2_text}
+        msg_user2 = _prepend_text_to_message(msg_user2, q2_system_prompt)
         msg_assistant2 = _assistant_text_message(gt_prompt2)
 
         rec: Dict[str, Any] = {
-            "messages": [msg_system1, msg_user1, msg_assistant1, msg_system2, msg_user2, msg_assistant2],
+            "messages": [msg_user1, msg_assistant1, msg_user2, msg_assistant2],
             "sample_id": str(q2_item.get("sample_id", sid1 or "")),
         }
         for key in ("sample_id_raw", "id", "prompt1_output", "transcript", "gt_prompt2"):
