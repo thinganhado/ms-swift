@@ -9,6 +9,18 @@ SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
 SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-3}"
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_mt}"
+TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
+NUM_TRAIN_EPOCHS="${NUM_TRAIN_EPOCHS:-5}"
+PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-4}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
+LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-0.1}"
+WARMUP_RATIO="${WARMUP_RATIO:-0.03}"
+SAVE_STEPS="${SAVE_STEPS:-200}"
+LOGGING_STEPS="${LOGGING_STEPS:-10}"
+SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-5}"
+DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-1}"
+DATASET_NUM_PROC="${DATASET_NUM_PROC:-4}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
@@ -83,7 +95,7 @@ swift sft \
   --model "${MODEL_ID}" \
   --dataset "${SFT_JSON_SWIFT}" \
   --tuner_type lora \
-  --torch_dtype float16 \
+  --torch_dtype "${TORCH_DTYPE}" \
   --lora_rank 32 \
   --lora_alpha 64 \
   --lora_dropout 0.05 \
@@ -91,19 +103,19 @@ swift sft \
   --freeze_llm true \
   --freeze_vit false \
   --freeze_aligner false \
-  --num_train_epochs 5 \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 8 \
-  --learning_rate 1e-4 \
-  --weight_decay 0.1 \
-  --warmup_ratio 0.03 \
+  --num_train_epochs "${NUM_TRAIN_EPOCHS}" \
+  --per_device_train_batch_size "${PER_DEVICE_TRAIN_BATCH_SIZE}" \
+  --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS}" \
+  --learning_rate "${LEARNING_RATE}" \
+  --weight_decay "${WEIGHT_DECAY}" \
+  --warmup_ratio "${WARMUP_RATIO}" \
   --lr_scheduler_type cosine \
   --max_pixels 524288 \
   --deepspeed zero2 \
-  --logging_steps 10 \
-  --save_steps 200 \
-  --save_total_limit 5 \
-  --dataloader_num_workers 1 \
-  --dataset_num_proc 4 \
+  --logging_steps "${LOGGING_STEPS}" \
+  --save_steps "${SAVE_STEPS}" \
+  --save_total_limit "${SAVE_TOTAL_LIMIT}" \
+  --dataloader_num_workers "${DATALOADER_NUM_WORKERS}" \
+  --dataset_num_proc "${DATASET_NUM_PROC}" \
   --output_dir "${OUTPUT_DIR}" \
   --report_to tensorboard
