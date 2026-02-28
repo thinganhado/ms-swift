@@ -206,6 +206,59 @@ def _split_top_level_tuples(text: str) -> List[str]:
     return out
 
 
+def _strip_outer_parens(text: str) -> str:
+    s = str(text or "").strip()
+    if len(s) >= 2 and s[0] == "(" and s[-1] == ")":
+        return s[1:-1].strip()
+    return s
+
+
+def _parse_tuple_fields_any(raw: str, idx: int) -> Optional[Tuple[str, str, str, str]]:
+    body = _strip_outer_parens(raw)
+    m_t = re.search(rf"\bT{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+        r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+    )
+    m_f = re.search(rf"\bF{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+        r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+    )
+    m_p = re.search(rf"\bP{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+        r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+    )
+    m_en = re.search(rf"\bEn{idx}\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL) or re.search(
+        r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL
+    )
+    if m_t and m_f and m_p and m_en:
+        return (
+            m_t.group(1).strip(),
+            m_f.group(1).strip(),
+            m_p.group(1).strip(),
+            m_en.group(1).strip(),
+        )
+
+    parts = [p.strip() for p in body.split(",", 4)]
+    if len(parts) == 5:
+        _, t, fband, p, en = parts
+        return t, fband, p, en
+    if len(parts) == 4:
+        t, fband, p, en = parts
+        return t, fband, p, en
+    return None
+
+
+def _normalize_gt_prompt2_indexed(text: str) -> str:
+    tuple_matches = _split_top_level_tuples(text)
+    if not tuple_matches:
+        return str(text or "").strip()
+    rebuilt: List[str] = []
+    for idx, raw in enumerate(tuple_matches[:3], start=1):
+        parsed = _parse_tuple_fields_any(raw, idx)
+        if parsed is None:
+            return str(text or "").strip()
+        t, fband, p, en = parsed
+        rebuilt.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}={en})')
+    return "; ".join(rebuilt)
+
+
 def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict[str, Any], gt_prompt2: str) -> Tuple[str, str]:
     q1_ids = _extract_ints(assistant1_text)
     if len(q1_ids) < 3:
@@ -221,34 +274,9 @@ def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
     q2_ids = q2_ids[:3]
 
-    def _parse_tuple_fields(raw: str, src_idx: int) -> Optional[Tuple[str, str, str, str]]:
-        body = raw.strip()
-        if body.startswith("(") and body.endswith(")"):
-            body = body[1:-1].strip()
-        m_t = re.search(rf"\bT{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
-            r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
-        )
-        m_f = re.search(rf"\bF{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
-            r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
-        )
-        m_p = re.search(rf"\bP{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
-            r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
-        )
-        m_en = re.search(rf"\bEn{src_idx}\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL) or re.search(
-            r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL
-        )
-        if not (m_t and m_f and m_p and m_en):
-            return None
-        return (
-            m_t.group(1).strip(),
-            m_f.group(1).strip(),
-            m_p.group(1).strip(),
-            m_en.group(1).strip(),
-        )
-
     tuple_by_source_id: Dict[int, Tuple[str, str, str, str]] = {}
     for src_idx, (src_id, raw) in enumerate(zip(q2_ids, tuple_matches[:3]), start=1):
-        parsed = _parse_tuple_fields(raw, src_idx)
+        parsed = _parse_tuple_fields_any(raw, src_idx)
         if parsed is None:
             continue
         tuple_by_source_id[int(src_id)] = parsed
@@ -317,7 +345,7 @@ def _build_from_two_sources(
         if not isinstance(q2_conv, list) or len(q2_conv) < 1:
             continue
         user2 = q2_conv[0]
-        gt_prompt2 = str(q2_item.get("gt_prompt2", "")).strip()
+        gt_prompt2 = _normalize_gt_prompt2_indexed(str(q2_item.get("gt_prompt2", "")).strip())
         if not gt_prompt2:
             continue
 
