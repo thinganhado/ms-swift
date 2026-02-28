@@ -4,6 +4,28 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+DEFAULT_Q1_SYSTEM_PROMPT = (
+    "As an expert in deepfake speech spectrogram forensics, you can detect regions containing "
+    "deepfake artifacts by analysing spectrogram segments. Return only the JSON array of your "
+    "three chosen region IDs."
+)
+DEFAULT_Q2_SYSTEM_PROMPT = """You are an expert in deepfake speech spectrogram forensics.
+
+You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
+For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+
+OUTPUT FORMAT (must follow exactly):
+(Cn=ID1, T=..., F=..., P=..., En=\"...\"); (Cn=ID2, T=..., F=..., P=..., En=\"...\"); (Cn=ID3, T=..., F=..., P=..., En=\"...\")
+
+Field definitions:
+- Cn: region_id
+- T: one of {speech, non-speech}
+- F: one of {low, mid, high}
+- P: one of {consonant, vowel, unvoiced}
+- En: textual description, must be enclosed in double quotes.
+
+Do not output any other text outside the three tuples."""
+
 
 def _map_role(role: str) -> str:
     role = str(role or "").lower()
@@ -77,6 +99,10 @@ def _assistant_text_message(text: str) -> Dict[str, Any]:
     }
 
 
+def _system_text_message(text: str) -> Dict[str, Any]:
+    return {"role": "system", "content": str(text or "").strip()}
+
+
 def _load_json(path: Path) -> List[Dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, list):
@@ -106,7 +132,12 @@ def _extract_q1_target(item: Dict[str, Any], conv: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_from_two_sources(
+    q1_data: List[Dict[str, Any]],
+    q2_data: List[Dict[str, Any]],
+    q1_system_prompt: str,
+    q2_system_prompt: str,
+) -> List[Dict[str, Any]]:
     q2_index: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for item in q2_data:
         conv = item.get("messages") or item.get("conversations")
@@ -153,13 +184,15 @@ def _build_from_two_sources(q1_data: List[Dict[str, Any]], q2_data: List[Dict[st
             continue
 
         # Keep both turns multimodal/text exactly as builders provide.
+        msg_system1 = _system_text_message(q1_system_prompt)
         msg_user1 = _norm_message_content(user1, img1)
         msg_assistant1 = _assistant_text_message(assistant1_text)
+        msg_system2 = _system_text_message(q2_system_prompt)
         msg_user2 = _norm_message_content(user2, _extract_message_image(user2))
         msg_assistant2 = _assistant_text_message(gt_prompt2)
 
         rec: Dict[str, Any] = {
-            "messages": [msg_user1, msg_assistant1, msg_user2, msg_assistant2],
+            "messages": [msg_system1, msg_user1, msg_assistant1, msg_system2, msg_user2, msg_assistant2],
             "sample_id": str(q2_item.get("sample_id", sid1 or "")),
         }
         for key in ("sample_id_raw", "id", "prompt1_output", "transcript", "gt_prompt2"):
@@ -176,6 +209,8 @@ def main():
     ap.add_argument("--input-json", default="", help="Legacy single-source mode.")
     ap.add_argument("--q1-json", default="", help="Query1 builder output JSON.")
     ap.add_argument("--q2-json", default="", help="Prompt2 builder output JSON (GT-based).")
+    ap.add_argument("--q1-system-prompt", default=DEFAULT_Q1_SYSTEM_PROMPT)
+    ap.add_argument("--q2-system-prompt", default=DEFAULT_Q2_SYSTEM_PROMPT)
     ap.add_argument("--output-json", required=True)
     args = ap.parse_args()
 
@@ -187,7 +222,7 @@ def main():
         q2_path = Path(args.q2_json).expanduser().resolve()
         q1_data = _load_json(q1_path)
         q2_data = _load_json(q2_path)
-        out = _build_from_two_sources(q1_data, q2_data)
+        out = _build_from_two_sources(q1_data, q2_data, args.q1_system_prompt, args.q2_system_prompt)
         print(f"mode: two-source (q1={q1_path}, q2={q2_path})")
     else:
         if not args.input_json:
