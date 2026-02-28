@@ -90,7 +90,10 @@ def _norm_message_content(msg: Dict[str, Any], image_path: Optional[str]) -> Dic
                 {"type": "text", "text": text},
             ],
         }
-    return {"role": role, "content": text}
+    return {
+        "role": role,
+        "content": [{"type": "text", "text": text}],
+    }
 
 
 def _assistant_text_message(text: str) -> Dict[str, Any]:
@@ -101,7 +104,10 @@ def _assistant_text_message(text: str) -> Dict[str, Any]:
 
 
 def _system_text_message(text: str) -> Dict[str, Any]:
-    return {"role": "system", "content": str(text or "").strip()}
+    return {
+        "role": "system",
+        "content": [{"type": "text", "text": str(text or "").strip()}],
+    }
 
 
 def _load_json(path: Path) -> List[Dict[str, Any]]:
