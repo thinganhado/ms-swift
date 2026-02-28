@@ -110,6 +110,36 @@ def _system_text_message(text: str) -> Dict[str, Any]:
     }
 
 
+def _prepend_text_to_message(msg: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+    prefix = str(prefix or "").strip()
+    if not prefix:
+        return msg
+
+    role = _map_role(msg.get("role", msg.get("from", "")))
+    content = msg.get("content", msg.get("value", ""))
+
+    if isinstance(content, list):
+        new_content = []
+        inserted = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text" and not inserted:
+                text = str(part.get("text", "")).strip()
+                joined = f"{prefix}\n\n{text}".strip() if text else prefix
+                new_part = dict(part)
+                new_part["text"] = joined
+                new_content.append(new_part)
+                inserted = True
+            else:
+                new_content.append(part)
+        if not inserted:
+            new_content.insert(0, {"type": "text", "text": prefix})
+        return {"role": role, "content": new_content}
+
+    text = str(content or "").strip()
+    joined = f"{prefix}\n\n{text}".strip() if text else prefix
+    return {"role": role, "content": [{"type": "text", "text": joined}]}
+
+
 def _load_json(path: Path) -> List[Dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, list):
@@ -318,9 +348,39 @@ def main():
             if not isinstance(conv, list) or len(conv) < 2:
                 continue
 
-            first = conv[0]
-            image_path = _extract_image_path(item, first.get("content", first.get("value")))
-            messages = [_norm_message_content(m, image_path if i == 0 else None) for i, m in enumerate(conv)]
+            image_path = None
+            for m in conv:
+                if _map_role(m.get("role", m.get("from", ""))) == "user":
+                    image_path = _extract_image_path(item, m.get("content", m.get("value")))
+                    if image_path:
+                        break
+
+            messages = []
+            pending_system_texts: List[str] = []
+            user_idx = 0
+            for m in conv:
+                role = _map_role(m.get("role", m.get("from", "")))
+                if role == "system":
+                    sys_text = _extract_text_only(m.get("content", m.get("value", ""))).strip()
+                    if sys_text:
+                        pending_system_texts.append(sys_text)
+                    continue
+
+                img_for_msg = image_path if role == "user" and user_idx == 0 else None
+                norm_msg = _norm_message_content(m, img_for_msg)
+                if role == "user":
+                    user_idx += 1
+                    if pending_system_texts:
+                        norm_msg = _prepend_text_to_message(norm_msg, "\n\n".join(pending_system_texts))
+                        pending_system_texts = []
+                elif pending_system_texts:
+                    # Fallback: attach stray system text to the next non-system message.
+                    norm_msg = _prepend_text_to_message(norm_msg, "\n\n".join(pending_system_texts))
+                    pending_system_texts = []
+                messages.append(norm_msg)
+
+            if len(messages) < 2:
+                continue
 
             rec: Dict[str, Any] = {"messages": messages}
             for key in ("sample_id", "sample_id_raw", "id"):
