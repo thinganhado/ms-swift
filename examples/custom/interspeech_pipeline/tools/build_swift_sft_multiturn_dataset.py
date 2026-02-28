@@ -16,10 +16,10 @@ You are given a spectrogram and transcript. You have already selected exactly 3 
 For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
 
 OUTPUT FORMAT (must follow exactly):
-(Cn=ID1, T=..., F=..., P=..., En=\"...\"); (Cn=ID2, T=..., F=..., P=..., En=\"...\"); (Cn=ID3, T=..., F=..., P=..., En=\"...\")
+(T1=..., F1=..., P1=..., En1=\"...\"); (T2=..., F2=..., P2=..., En2=\"...\"); (T3=..., F3=..., P3=..., En3=\"...\")
 
 Field definitions:
-- Cn: region_id
+- Fields ending in 1, 2, and 3 correspond to ID1, ID2, and ID3 respectively.
 - T: one of {speech, non-speech}
 - F: one of {low, mid, high}
 - P: one of {consonant, vowel, unvoiced}
@@ -216,15 +216,44 @@ def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict
     if len(tuple_matches) < 3:
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
 
-    tuples_by_cn: Dict[int, str] = {}
-    for raw in tuple_matches:
-        m = re.search(r"\bCn\s*=\s*(\d+)\b", raw)
-        if not m:
-            continue
-        cn = int(m.group(1))
-        tuples_by_cn[cn] = raw.strip()
+    q2_ids = _extract_ints(str(q2_item.get("prompt1_output", "")))
+    if len(q2_ids) < 3:
+        return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
+    q2_ids = q2_ids[:3]
 
-    if not all(cn in tuples_by_cn for cn in q1_ids):
+    def _parse_tuple_fields(raw: str, src_idx: int) -> Optional[Tuple[str, str, str, str]]:
+        body = raw.strip()
+        if body.startswith("(") and body.endswith(")"):
+            body = body[1:-1].strip()
+        m_t = re.search(rf"\bT{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_f = re.search(rf"\bF{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_p = re.search(rf"\bP{src_idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_en = re.search(rf"\bEn{src_idx}\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL) or re.search(
+            r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL
+        )
+        if not (m_t and m_f and m_p and m_en):
+            return None
+        return (
+            m_t.group(1).strip(),
+            m_f.group(1).strip(),
+            m_p.group(1).strip(),
+            m_en.group(1).strip(),
+        )
+
+    tuple_by_source_id: Dict[int, Tuple[str, str, str, str]] = {}
+    for src_idx, (src_id, raw) in enumerate(zip(q2_ids, tuple_matches[:3]), start=1):
+        parsed = _parse_tuple_fields(raw, src_idx)
+        if parsed is None:
+            continue
+        tuple_by_source_id[int(src_id)] = parsed
+
+    if not all(cn in tuple_by_source_id for cn in q1_ids):
         return _extract_text_only(user2.get("content", user2.get("value", ""))).strip(), gt_prompt2
 
     prompt1_output = f"[{', '.join(map(str, q1_ids))}]"
@@ -233,7 +262,11 @@ def _reorder_q2_by_q1(assistant1_text: str, q2_item: Dict[str, Any], user2: Dict
         "Explain the spoof artifact for each of the three selected region IDs in "
         f"{prompt1_output} . This is the transcript for context: {transcript}"
     ).strip()
-    gt_prompt2_reordered = "; ".join([tuples_by_cn[cn] for cn in q1_ids])
+    rebuilt = []
+    for dst_idx, cn in enumerate(q1_ids, start=1):
+        t, fband, p, en = tuple_by_source_id[cn]
+        rebuilt.append(f'(T{dst_idx}={t}, F{dst_idx}={fband}, P{dst_idx}={p}, En{dst_idx}={en})')
+    gt_prompt2_reordered = "; ".join(rebuilt)
     return user2_text, gt_prompt2_reordered
 
 

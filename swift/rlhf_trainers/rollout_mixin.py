@@ -147,8 +147,8 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_dedupe_only_wrong_ids = os.getenv('GRPO_DEDUPE_ONLY_WRONG_IDS', '1').lower() in {
             '1', 'true', 'yes', 'on'
         }
-        # Prompt-2 retry gate: enforce generated tuple Cn IDs match input prompt1_output IDs.
-        self.grpo_p2_retry_cn_match = os.getenv('GRPO_P2_RETRY_CN_MATCH', '0').lower() in {
+        # Prompt-2 retry gate: retry when any tuple misses required T/F/P/En fields.
+        self.grpo_p2_retry_missing_fields = os.getenv('GRPO_P2_RETRY_MISSING_FIELDS', '0').lower() in {
             '1', 'true', 'yes', 'on'
         }
 
@@ -1083,12 +1083,9 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         return (ids[0], ids[1], ids[2])
 
     @staticmethod
-    def _extract_cn_triplet_from_messages(messages: List[Dict[str, Any]]) -> Optional[Tuple[int, int, int]]:
-        """Parse tuple Cn IDs from latest assistant output:
-        (Cn=..., T=..., F=..., P=..., En="..."); ...
-        """
+    def _assistant_text(messages: List[Dict[str, Any]]) -> str:
         if not messages:
-            return None
+            return ''
         assistant_text = ''
         for msg in reversed(messages):
             if msg.get('role') != 'assistant':
@@ -1104,48 +1101,71 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         chunks.append(str(part.get('text', '')))
                 assistant_text = ''.join(chunks)
                 break
-        if not assistant_text:
-            return None
-
-        text = str(assistant_text)
-        # Preferred keyed form
-        cns = [int(x) for x in re.findall(r'\bCn\s*=\s*(\d+)\b', text, flags=re.IGNORECASE)]
-        if len(cns) != 3:
-            # Backward-compatible positional tuple fallback: take first integer of each parenthesized tuple.
-            tuples = re.findall(r'\((.*?)\)', text, flags=re.DOTALL)
-            cns = []
-            for t in tuples:
-                m = re.search(r'\d+', t)
-                if m:
-                    cns.append(int(m.group(0)))
-            if len(cns) != 3:
-                return None
-        if len(set(cns)) != 3 or any(i < 1 or i > 16 for i in cns):
-            return None
-        return (cns[0], cns[1], cns[2])
+        return assistant_text
 
     @staticmethod
-    def _assistant_has_cn_tokens(messages: List[Dict[str, Any]]) -> bool:
-        if not messages:
-            return False
-        assistant_text = ''
-        for msg in reversed(messages):
-            if msg.get('role') != 'assistant':
+    def _p2_output_has_missing_fields(messages: List[Dict[str, Any]]) -> bool:
+        text = RolloutTrainerMixin._assistant_text(messages)
+        if not text:
+            return True
+
+        # Split top-level tuples only.
+        tuples = []
+        start = None
+        depth = 0
+        in_quote = False
+        escape = False
+        for i, ch in enumerate(str(text)):
+            if escape:
+                escape = False
                 continue
-            content = msg.get('content')
-            if isinstance(content, str):
-                assistant_text = content
-                break
-            if isinstance(content, list):
-                chunks = []
-                for part in content:
-                    if isinstance(part, dict) and part.get('type') == 'text':
-                        chunks.append(str(part.get('text', '')))
-                assistant_text = ''.join(chunks)
-                break
-        if not assistant_text:
-            return False
-        return bool(re.search(r'\bCn\s*=', str(assistant_text), flags=re.IGNORECASE))
+            if ch == '\\':
+                escape = True
+                continue
+            if ch == '"':
+                in_quote = not in_quote
+                continue
+            if in_quote:
+                continue
+            if ch == '(':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == ')':
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start is not None:
+                        tuples.append(str(text)[start:i + 1].strip())
+                        start = None
+        if len(tuples) != 3:
+            return True
+
+        for slot, tup in enumerate(tuples, start=1):
+            body = tup[1:-1].strip() if tup.startswith('(') and tup.endswith(')') else tup.strip()
+            if not (
+                re.search(rf'\bT{slot}\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+                or re.search(r'\bT\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+            ):
+                return True
+            if not (
+                re.search(rf'\bF{slot}\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+                or re.search(r'\bF\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+            ):
+                return True
+            if not (
+                re.search(rf'\bP{slot}\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+                or re.search(r'\bP\s*=\s*([^,]+?)\s*(?:,|$)', body, flags=re.IGNORECASE)
+            ):
+                return True
+            m_en = re.search(rf'\bEn{slot}\s*=\s*(.+)\s*$', body, flags=re.IGNORECASE | re.DOTALL) or re.search(
+                r'\bEn\s*=\s*(.+)\s*$', body, flags=re.IGNORECASE | re.DOTALL
+            )
+            if not m_en:
+                return True
+            en_val = str(m_en.group(1)).strip()
+            if len(en_val) < 2 or en_val[0] != '"' or en_val[-1] != '"':
+                return True
+        return False
 
     def _add_prompt_id_to_inputs(self, inputs: DataType) -> DataType:
         """Add unique prompt_id and request_id to each input"""
@@ -1336,7 +1356,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
             merged = [
                 merge_output_input_data(deepcopy(input_data), output) for input_data, output in zip(inputs, outputs)
             ]
-            if not ((self.grpo_dedupe_rollouts and self.grpo_dedupe_max_retries > 0) or self.grpo_p2_retry_cn_match):
+            if not ((self.grpo_dedupe_rollouts and self.grpo_dedupe_max_retries > 0) or self.grpo_p2_retry_missing_fields):
                 return merged
 
             # Local per-rank dedupe only: no all_gather_object of completions.
@@ -1432,19 +1452,14 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     gt_triplet = self._extract_gt_triplet_from_input(merged[idx])
                     cur_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
                     cur_valid = cur_triplet is not None
-                    expected_cn_triplet = self._extract_prompt1_triplet_from_input(merged[idx])
-                    cur_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
-                    cur_has_cn = self._assistant_has_cn_tokens(merged[idx].get('messages', []))
-                    cur_cn_mismatch = (
-                        self.grpo_p2_retry_cn_match
-                        and cur_has_cn
-                        and expected_cn_triplet is not None
-                        and (cur_cn_triplet is None or cur_cn_triplet != expected_cn_triplet)
+                    cur_missing_fields = (
+                        self.grpo_p2_retry_missing_fields
+                        and self._p2_output_has_missing_fields(merged[idx].get('messages', []))
                     )
                     needs_retry = (
                         (self.grpo_dedupe_require_valid and not cur_valid)
                         or (cur_valid and _violates_diversity(cur_triplet, gt_triplet))
-                        or cur_cn_mismatch
+                        or cur_missing_fields
                     )
 
                     if not needs_retry:
@@ -1482,19 +1497,15 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         candidate = merge_output_input_data(deepcopy(base_input), retry_outputs[0])
                         cand_triplet = self._extract_triplet_from_messages(candidate.get('messages', []))
                         cand_valid = cand_triplet is not None
-                        cand_cn_triplet = self._extract_cn_triplet_from_messages(candidate.get('messages', []))
-                        cand_has_cn = self._assistant_has_cn_tokens(candidate.get('messages', []))
-                        cand_cn_mismatch = (
-                            self.grpo_p2_retry_cn_match
-                            and cand_has_cn
-                            and expected_cn_triplet is not None
-                            and (cand_cn_triplet is None or cand_cn_triplet != expected_cn_triplet)
+                        cand_missing_fields = (
+                            self.grpo_p2_retry_missing_fields
+                            and self._p2_output_has_missing_fields(candidate.get('messages', []))
                         )
                         if self.grpo_dedupe_require_valid and not cand_valid:
                             continue
                         if cand_valid and _violates_diversity(cand_triplet, gt_triplet):
                             continue
-                        if cand_cn_mismatch:
+                        if cand_missing_fields:
                             continue
                         if (self.grpo_retry_use_gt_feedback and gt_triplet is not None and cand_valid
                                 and self.grpo_retry_require_improvement):
@@ -1516,15 +1527,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                         # If it still violates constraints, do NOT register it into dedupe state.
                         # This keeps subsequent rollouts from inheriting repeated non-hit IDs.
                         final_triplet = self._extract_triplet_from_messages(merged[idx].get('messages', []))
-                        final_cn_triplet = self._extract_cn_triplet_from_messages(merged[idx].get('messages', []))
-                        final_has_cn = self._assistant_has_cn_tokens(merged[idx].get('messages', []))
-                        final_cn_mismatch = (
-                            self.grpo_p2_retry_cn_match
-                            and final_has_cn
-                            and expected_cn_triplet is not None
-                            and (final_cn_triplet is None or final_cn_triplet != expected_cn_triplet)
+                        final_missing_fields = (
+                            self.grpo_p2_retry_missing_fields
+                            and self._p2_output_has_missing_fields(merged[idx].get('messages', []))
                         )
-                        if (final_triplet is None or not _violates_diversity(final_triplet, gt_triplet)) and (not final_cn_mismatch):
+                        if (final_triplet is None or not _violates_diversity(final_triplet, gt_triplet)) and (not final_missing_fields):
                             _accept_triplet(final_triplet, gt_triplet)
                         else:
                             total_exhausted_violations += 1
@@ -1539,7 +1546,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'exact_unique={self.grpo_dedupe_exact_unique}, '
                     f'gt_feedback={self.grpo_retry_use_gt_feedback}, '
                     f'require_improvement={self.grpo_retry_require_improvement}, '
-                    f'p2_cn_match={self.grpo_p2_retry_cn_match}, '
+                    f'p2_missing_fields={self.grpo_p2_retry_missing_fields}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
                     f'forced_repairs=0, strict_failures=0, exhausted_violations={total_exhausted_violations}')
             return merged

@@ -295,7 +295,6 @@ def _norm_phon(v: str) -> Optional[str]:
     return None
 
 
-_CN_PATTERN = re.compile(r"\bcn\s*=\s*(\d+)\b", flags=re.IGNORECASE)
 _T_PATTERN = re.compile(r"\bt\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
 _F_PATTERN = re.compile(r"\bf\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
 _P_PATTERN = re.compile(r"\bp\s*=\s*([^,]+?)\s*(?:,|$)", flags=re.IGNORECASE)
@@ -348,57 +347,43 @@ def _parse_region_tuples(text: str, expected_ids: Optional[Sequence[int]] = None
 
     rows: List[Dict[str, object]] = []
     for idx, raw in enumerate(raw_tuples):
+        slot = idx + 1
         body = _strip_wrapped_quotes(str(raw or "").strip())
         if body.startswith("(") and body.endswith(")"):
             body = body[1:-1].strip()
-        cn_raw = ""
         t_raw = ""
         f_raw = ""
         p_raw = ""
         en_raw = ""
-        has_explicit_cn = False
 
-        # Preferred: keyed format
-        # Legacy keyed format: (Cn=1, T=speech, F=mid, P=vowel, En="...")
-        # New keyed format:    (T=speech, F=mid, P=vowel, En="...")
-        m_cn = _CN_PATTERN.search(body)
-        m_t = _T_PATTERN.search(body)
-        m_f = _F_PATTERN.search(body)
-        m_p = _P_PATTERN.search(body)
-        m_en = _EN_PATTERN.search(body)
+        # Position-aligned format:
+        # (T1=speech, F1=mid, P1=vowel, En1="...")
+        # fallback tolerated: (T=speech, F=mid, P=vowel, En="...")
+        m_t = re.search(rf"\bT{slot}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or _T_PATTERN.search(body)
+        m_f = re.search(rf"\bF{slot}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or _F_PATTERN.search(body)
+        m_p = re.search(rf"\bP{slot}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or _P_PATTERN.search(body)
+        m_en = re.search(rf"\bEn{slot}\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL) or _EN_PATTERN.search(body)
         if m_t and m_f and m_p and m_en:
-            if m_cn:
-                cn_raw = m_cn.group(1).strip()
-                has_explicit_cn = True
             t_raw = m_t.group(1).strip()
             f_raw = m_f.group(1).strip()
             p_raw = m_p.group(1).strip()
             en_raw = m_en.group(1).strip()
         else:
-            # Backward-compatible positional format:
-            # (1, speech, mid, vowel, ...) or (speech, mid, vowel, ...)
-            parts = [p.strip() for p in body.split(",", 4)]
-            if len(parts) == 5:
-                cn_raw, t_raw, f_raw, p_raw, en_raw = parts
-                has_explicit_cn = True
-            elif len(parts) == 4:
+            # Positional fallback without Cn:
+            # (speech, mid, vowel, ...)
+            parts = [p.strip() for p in body.split(",", 3)]
+            if len(parts) == 4:
                 t_raw, f_raw, p_raw, en_raw = parts
             else:
                 return None
 
-        if has_explicit_cn:
-            try:
-                cn_i = int(cn_raw)
-            except Exception:
-                cn_i = -1
-        elif expected_ids is not None and idx < len(expected_ids):
+        if expected_ids is not None and idx < len(expected_ids):
             try:
                 cn_i = int(expected_ids[idx])
             except Exception:
                 cn_i = -1
         else:
             cn_i = -1
-        cn_ok = 1 <= cn_i <= 16
 
         t = _norm_time(t_raw)
         f = _norm_freq(f_raw)
@@ -409,7 +394,7 @@ def _parse_region_tuples(text: str, expected_ids: Optional[Sequence[int]] = None
 
         rows.append(
             {
-                "Cn": str(cn_i) if cn_ok else "",
+                "Cn": str(cn_i) if 1 <= cn_i <= 16 else "",
                 "Cn_i": cn_i,
                 "T": t,
                 "F": f,
@@ -490,24 +475,22 @@ class InterspeechPrompt2Reward(ORM):
 
     @staticmethod
     def _format_tuple_score(pred: Dict[str, object]) -> float:
-        cn_i = int(pred.get("Cn_i", -1))
         t = pred.get("T")
         f = pred.get("F")
         p = pred.get("P")
         en = str(pred.get("En", "")).strip()
         en_quoted = bool(pred.get("en_quoted", False))
-        ok = (1 <= cn_i <= 16) and (t is not None) and (f is not None) and (p is not None) and bool(en) and en_quoted
+        ok = (t is not None) and (f is not None) and (p is not None) and bool(en) and en_quoted
         return 1.0 if ok else 0.0
 
     @staticmethod
     def _bound_score(pred: Dict[str, object]) -> float:
-        cn_i = int(pred.get("Cn_i", -1))
         en = str(pred.get("En", "")).strip()
-        if not en or not (1 <= cn_i <= 16):
+        if not en:
             return 0.0
         ids = [int(x) for x in re.findall(r"\d+", en) if 1 <= int(x) <= 16]
-        # no other region IDs besides Cn_i
-        return 1.0 if all(i == cn_i for i in ids) else 0.0
+        # Position-aligned mode: En should not mention explicit region IDs.
+        return 1.0 if not ids else 0.0
 
     @staticmethod
     def _unc_score(pred: Dict[str, object]) -> float:
@@ -622,9 +605,8 @@ class InterspeechPrompt2Reward(ORM):
                         {
                             "i": i,
                             "parsed": False,
-                            "gt_ids": [],
-                            "pred_cns": [],
-                            "m_mask": [],
+                            "expected_ids": expected_ids,
+                            "tuple_fields_ok": [],
                             "reward": 0.0,
                             "raw_pred": str(completion)[:200],
                         }
@@ -644,15 +626,13 @@ class InterspeechPrompt2Reward(ORM):
                 gt_tuple_available += 1
 
             total = 0.0
-            pred_cns: List[int] = []
-            m_mask: List[int] = []
+            tuple_fields_ok: List[int] = []
             for pred in pred_rows:
                 fmt_i = self._format_tuple_score(pred)
                 cn = str(pred.get("Cn", "")).strip()
                 cn_i = int(pred.get("Cn_i", -1))
                 m_i = 1.0 if (cn_i in gt_ids) else 0.0
-                pred_cns.append(cn_i)
-                m_mask.append(int(m_i))
+                tuple_fields_ok.append(int(fmt_i))
                 tuple_total += 1
                 tuple_fmt_sum += fmt_i
                 tuple_m_sum += m_i
@@ -691,9 +671,9 @@ class InterspeechPrompt2Reward(ORM):
                     {
                         "i": i,
                         "parsed": True,
-                        "gt_ids": sorted(list(gt_ids)),
-                        "pred_cns": pred_cns,
-                        "m_mask": m_mask,
+                        "expected_ids": expected_ids,
+                        "tuple_fields_ok": tuple_fields_ok,
+                        "position_match_mask": [int(int(pred.get("Cn_i", -1)) in gt_ids) for pred in pred_rows],
                         "reward": sample_reward,
                         "raw_pred": str(completion)[:200],
                     }
@@ -711,7 +691,7 @@ class InterspeechPrompt2Reward(ORM):
             total_n = max(1, len(completions))
             valid_rate = 100.0 * valid_count / total_n
             mean_tuple_fmt = (tuple_fmt_sum / tuple_total) if tuple_total > 0 else 0.0
-            overlap_tuple_rate = (tuple_m_sum / tuple_total) if tuple_total > 0 else 0.0
+            supervised_tuple_rate = (tuple_m_sum / tuple_total) if tuple_total > 0 else 0.0
             mean_acc_sup = (acc_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
             mean_cons_sup = (cons_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
             mean_cons_rob = (cons_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
@@ -733,7 +713,7 @@ class InterspeechPrompt2Reward(ORM):
                 f"[p2_metrics] step={global_step} "
                 f"valid_format_rate={valid_rate:.2f}% "
                 f"mean_tuple_fmt={mean_tuple_fmt:.4f} "
-                f"overlap_tuple_rate={overlap_tuple_rate:.4f} "
+                f"supervised_tuple_rate={supervised_tuple_rate:.4f} "
                 f"mean_acc_sup={mean_acc_sup:.4f} "
                 f"mean_cons_sup={mean_cons_sup:.4f} "
                 f"mean_bound_rob={mean_bound_rob:.4f} "
@@ -754,8 +734,9 @@ class InterspeechPrompt2Reward(ORM):
                 )
                 for row in debug_rows:
                     print(
-                        f"[p2_debug] i={row['i']} parsed={row['parsed']} gt_ids={row['gt_ids']} "
-                        f"pred_cns={row['pred_cns']} m={row['m_mask']} reward={float(row['reward']):.4f} "
+                        f"[p2_debug] i={row['i']} parsed={row['parsed']} expected_ids={row['expected_ids']} "
+                        f"tuple_fields_ok={row['tuple_fields_ok']} pos_match={row.get('position_match_mask', [])} "
+                        f"reward={float(row['reward']):.4f} "
                         f"raw_pred={row['raw_pred']!r}",
                         flush=True,
                     )

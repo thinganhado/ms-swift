@@ -89,29 +89,37 @@ def _normalize_gt_prompt2_no_cn(text: str) -> str:
         return str(text or "").strip()
 
     out: List[str] = []
-    for tup in tuples:
+    for idx, tup in enumerate(tuples, start=1):
         body = _strip_outer_parens(tup)
 
-        m_t = re.search(r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
-        m_f = re.search(r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
-        m_p = re.search(r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE)
-        m_en = re.search(r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL)
+        m_t = re.search(rf"\bT{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bT\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_f = re.search(rf"\bF{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bF\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_p = re.search(rf"\bP{idx}\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE) or re.search(
+            r"\bP\s*=\s*([^,]+?)\s*(?:,|$)", body, flags=re.IGNORECASE
+        )
+        m_en = re.search(rf"\bEn{idx}\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL) or re.search(
+            r"\bEn\s*=\s*(.+)\s*$", body, flags=re.IGNORECASE | re.DOTALL
+        )
         if m_t and m_f and m_p and m_en:
             t = m_t.group(1).strip()
             fband = m_f.group(1).strip()
             p = m_p.group(1).strip()
             en = m_en.group(1).strip()
-            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            out.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}={en})')
             continue
 
         parts = [p.strip() for p in body.split(",", 4)]
         if len(parts) == 5:
             _, t, fband, p, en = parts
-            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            out.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}={en})')
             continue
         if len(parts) == 4:
             t, fband, p, en = parts
-            out.append(f'(T={t}, F={fband}, P={p}, En={en})')
+            out.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}={en})')
             continue
 
         out.append(tup.strip())
@@ -299,7 +307,7 @@ def _build_from_csv(args: argparse.Namespace) -> List[Dict[str, Any]]:
 
         tuples = []
         ok = True
-        for r in ordered_rows:
+        for idx, r in enumerate(ordered_rows, start=1):
             rid = _norm(r.get("region_id"))
             t = _norm(r.get("T"))
             fband = _norm(r.get("F"))
@@ -309,7 +317,7 @@ def _build_from_csv(args: argparse.Namespace) -> List[Dict[str, Any]]:
             if not (rid and t and fband and p and en):
                 ok = False
                 break
-            tuples.append(f'(T={t}, F={fband}, P={p}, En="{en}")')
+            tuples.append(f'(T{idx}={t}, F{idx}={fband}, P{idx}={p}, En{idx}="{en}")')
         if not ok:
             continue
 

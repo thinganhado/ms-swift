@@ -16,18 +16,13 @@ OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_DIR_BASE%/}/${RUN_TAG}}"
 SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
 
 You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
-For each selected ID, in that same input order, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
 
 OUTPUT FORMAT (must follow exactly):
-(T=..., F=..., P=..., En=\"...\"); (T=..., F=..., P=..., En=\"...\"); (T=..., F=..., P=..., En=\"...\")
-
-Tuple alignment:
-- Tuple 1 corresponds to ID1
-- Tuple 2 corresponds to ID2
-- Tuple 3 corresponds to ID3
-- Do not repeat or print Cn / region IDs in the output tuples.
+(T1=..., F1=..., P1=..., En1=\"...\"); (T2=..., F2=..., P2=..., En2=\"...\"); (T3=..., F3=..., P3=..., En3=\"...\")
 
 Field definitions:
+- Fields ending in 1, 2, and 3 correspond to ID1, ID2, and ID3 respectively.
 - T: one of {speech, non-speech}
 - F: one of {low, mid, high}
 - P: one of {consonant, vowel, unvoiced}
@@ -52,7 +47,7 @@ INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD:-0}"
 INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES:-8}"
 INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS:-1}"
 INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE:-8}"
-GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH:-0}"
+GRPO_P2_RETRY_MISSING_FIELDS="${GRPO_P2_RETRY_MISSING_FIELDS:-1}"
 
 mkdir -p "${OUTPUT_DIR}"
 echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
@@ -127,7 +122,7 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES}" \
   INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS}" \
   INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE}" \
-  GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH}" \
+  GRPO_P2_RETRY_MISSING_FIELDS="${GRPO_P2_RETRY_MISSING_FIELDS}" \
   swift rlhf \
     "${COMMON_ARGS[@]}" \
     --dataset "${GRPO2_PRED_JSON_SWIFT}" \
@@ -156,7 +151,7 @@ INTERSPEECH_DEBUG_REWARD="${INTERSPEECH_DEBUG_REWARD}" \
 INTERSPEECH_DEBUG_SAMPLES="${INTERSPEECH_DEBUG_SAMPLES}" \
 INTERSPEECH_LOG_EVERY_STEPS="${INTERSPEECH_LOG_EVERY_STEPS}" \
 INTERSPEECH_GROUP_SIZE="${INTERSPEECH_GROUP_SIZE}" \
-GRPO_P2_RETRY_CN_MATCH="${GRPO_P2_RETRY_CN_MATCH}" \
+GRPO_P2_RETRY_MISSING_FIELDS="${GRPO_P2_RETRY_MISSING_FIELDS}" \
 swift rlhf \
   "${COMMON_ARGS[@]}" \
   --dataset "${GRPO2_GT_JSON_SWIFT}" \

@@ -75,9 +75,30 @@ def has_image(content):
             return True
     return False
 
+def extract_user_texts(messages):
+    out = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "user":
+            continue
+        out.append(text_only(msg.get("content", "")))
+    return out
+
 for i, row in enumerate(data[:n_show]):
     sid = row.get("sample_id", f"row_{i}")
     print(f"[mt_dbg] sample={i} sample_id={sid}")
+    user_texts = extract_user_texts(row.get("messages", []))
+    if len(user_texts) >= 1:
+        q1 = user_texts[0].replace("\n", " ")
+        if len(q1) > 420:
+            q1 = q1[:420] + "..."
+        print(f"[mt_dbg]   embedded_q1_system_plus_user={q1!r}")
+    if len(user_texts) >= 2:
+        q2 = user_texts[1].replace("\n", " ")
+        if len(q2) > 420:
+            q2 = q2[:420] + "..."
+        print(f"[mt_dbg]   embedded_q2_system_plus_user={q2!r}")
     for j, msg in enumerate(row.get("messages", [])):
         role = msg.get("role", "")
         content = msg.get("content", "")
