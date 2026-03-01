@@ -22,6 +22,7 @@ SHARD_COUNT="${SHARD_COUNT:-4}"
 OVERWRITE="${OVERWRITE:-1}"
 RUN_TAG="${RUN_TAG:-eval_$(date +%Y%m%d_%H%M%S)}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
+MAX_CONCURRENT_SHARDS="${MAX_CONCURRENT_SHARDS:-${SHARD_COUNT}}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 TOP_P="${TOP_P:-0.95}"
@@ -64,6 +65,7 @@ echo "[run] META_JSON=${META_JSON}"
 echo "[run] RUN_DIR=${RUN_DIR}"
 echo "[run] SHARD_COUNT=${SHARD_COUNT}"
 echo "[run] GPU_IDS=${GPU_IDS}"
+echo "[run] MAX_CONCURRENT_SHARDS=${MAX_CONCURRENT_SHARDS}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
 
 cat > "${TMP_PY}" <<'PY'
@@ -197,6 +199,7 @@ def _load_model(model_id, deepseek_dir, dtype):
         llama_mod.LlamaFlashAttention2 = llama_mod.LlamaAttention
 
     from transformers import AutoModelForCausalLM
+    from transformers.generation import GenerationMixin
     from deepseek_vl2.models import DeepseekVLV2Processor
 
     processor = DeepseekVLV2Processor.from_pretrained(model_id)
@@ -205,6 +208,11 @@ def _load_model(model_id, deepseek_dir, dtype):
         trust_remote_code=True,
         torch_dtype=dtype,
     )
+    # transformers>=4.50 no longer provides GenerationMixin via PreTrainedModel.
+    # DeepSeek-VL2 remote-code models define prepare_inputs_for_generation but may
+    # not inherit GenerationMixin, so patch in generate() explicitly.
+    if not hasattr(model, "generate"):
+        model.__class__.generate = GenerationMixin.generate
     model = model.cuda().eval()
     return model, processor
 
@@ -358,6 +366,7 @@ IFS=',' read -r -a GPU_ARRAY <<< "${GPU_IDS}"
 conda activate vllm
 
 pids=()
+active_jobs=0
 for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
   gpu="${GPU_ARRAY[$(( shard_id % ${#GPU_ARRAY[@]} ))]}"
   shard_dir="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}"
@@ -382,6 +391,14 @@ for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
         --deepseek-dir "${DEEPSEEK_VL2_DIR}"
   ) &
   pids+=("$!")
+  active_jobs=$((active_jobs + 1))
+  if [ "${active_jobs}" -ge "${MAX_CONCURRENT_SHARDS}" ]; then
+    for pid in "${pids[@]}"; do
+      wait "${pid}"
+    done
+    pids=()
+    active_jobs=0
+  fi
 done
 
 for pid in "${pids[@]}"; do
