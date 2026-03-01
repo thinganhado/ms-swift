@@ -231,8 +231,15 @@ def _load_model(model_id, deepseek_dir, dtype):
         for attr_name in ("num_hidden_layers", "num_attention_heads", "hidden_size", "num_key_value_heads"):
             if not hasattr(model.config, attr_name) and hasattr(decoder_config, attr_name):
                 setattr(model.config, attr_name, getattr(decoder_config, attr_name))
-    if getattr(model, "generation_config", None) is None:
-        model.generation_config = GenerationConfig.from_model_config(model.config)
+    def _ensure_generation_config(module):
+        if module is None or not hasattr(module, "config"):
+            return
+        if getattr(module, "generation_config", None) is None:
+            module.generation_config = GenerationConfig.from_model_config(module.config)
+
+    _ensure_generation_config(model)
+    for attr_name in ("language", "language_model", "llm", "model"):
+        _ensure_generation_config(getattr(model, attr_name, None))
     model = model.cuda().eval()
     return model, processor
 
