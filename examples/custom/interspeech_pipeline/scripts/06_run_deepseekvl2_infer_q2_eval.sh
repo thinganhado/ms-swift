@@ -210,8 +210,13 @@ def _load_model(model_id, deepseek_dir, dtype):
         trust_remote_code=True,
         torch_dtype=dtype,
     )
-    if not hasattr(model, "generate"):
-        model.__class__.generate = GenerationMixin.generate
+    if not isinstance(model, GenerationMixin):
+        for attr_name, attr_value in GenerationMixin.__dict__.items():
+            if attr_name.startswith("__"):
+                continue
+            if hasattr(model.__class__, attr_name):
+                continue
+            setattr(model.__class__, attr_name, attr_value)
     model = model.cuda().eval()
     return model, processor
 
