@@ -202,6 +202,13 @@ print(f"saved_verifier_rows: {len(rows)}")
 print(f"saved: {dst}")
 PY
 
+if [ ! -s "${VERIFIER_INPUT_JSONL}" ]; then
+  echo "[error] verifier input is empty: ${VERIFIER_INPUT_JSONL}" >&2
+  echo "[error] No En1/En2/En3 explanations were extracted from ${RAW_RESULT_JSONL}." >&2
+  echo "[error] Check the model outputs in ${RAW_RESULT_JSONL}; this pipeline expects fields like En1=\"...\"." >&2
+  exit 1
+fi
+
 mkdir -p "${VERIFIER_OUTPUT_DIR}"
 
 cd "${QWEN3_DIR}"
