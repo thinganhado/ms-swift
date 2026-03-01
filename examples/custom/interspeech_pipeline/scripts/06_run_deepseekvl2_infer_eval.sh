@@ -218,6 +218,13 @@ def _load_model(model_id, deepseek_dir, dtype):
             if hasattr(model.__class__, attr_name):
                 continue
             setattr(model.__class__, attr_name, attr_value)
+    decoder_config = (getattr(model.config, "language_config", None)
+                      or getattr(model.config, "llm_config", None)
+                      or getattr(model.config, "text_config", None))
+    if decoder_config is not None:
+        for attr_name in ("num_hidden_layers", "num_attention_heads", "hidden_size", "num_key_value_heads"):
+            if not hasattr(model.config, attr_name) and hasattr(decoder_config, attr_name):
+                setattr(model.config, attr_name, getattr(decoder_config, attr_name))
     if getattr(model, "generation_config", None) is None:
         model.generation_config = GenerationConfig.from_model_config(model.config)
     model = model.cuda().eval()
