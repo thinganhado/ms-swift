@@ -43,6 +43,7 @@ SHARD_COUNT="${SHARD_COUNT:-4}"
 OVERWRITE="${OVERWRITE:-1}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
 MAX_CONCURRENT_SHARDS="${MAX_CONCURRENT_SHARDS:-1}"
+FINALIZE_SHARDS="${FINALIZE_SHARDS:-0}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1024}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 TOP_P="${TOP_P:-0.95}"
@@ -79,6 +80,7 @@ echo "[run] EVAL_JSON=${EVAL_JSON}"
 echo "[run] SHARD_COUNT=${SHARD_COUNT}"
 echo "[run] GPU_IDS=${GPU_IDS}"
 echo "[run] MAX_CONCURRENT_SHARDS=${MAX_CONCURRENT_SHARDS}"
+echo "[run] FINALIZE_SHARDS=${FINALIZE_SHARDS}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
 
 cat > "${TMP_PY}" <<'PY'
@@ -366,54 +368,84 @@ IFS=',' read -r -a GPU_ARRAY <<< "${GPU_IDS}"
 
 conda activate vllm
 
-pids=()
-active_jobs=0
-for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
-  gpu="${GPU_ARRAY[$(( shard_id % ${#GPU_ARRAY[@]} ))]}"
-  shard_dir="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}"
-  shard_jsonl="${shard_dir}/infer_result.jsonl"
-  mkdir -p "${shard_dir}"
-
-  echo "[launch] shard=${shard_id}/${SHARD_COUNT} gpu=${gpu} out=${shard_jsonl}"
-  (
-    CUDA_VISIBLE_DEVICES="${gpu}" \
-      python "${TMP_PY}" \
-        --model-id "${MODEL_ID}" \
-        --meta-json "${META_JSON}" \
-        --output-jsonl "${shard_jsonl}" \
-        --shard-count "${SHARD_COUNT}" \
-        --shard-id "${shard_id}" \
-        --overwrite "${OVERWRITE}" \
-        --max-new-tokens "${MAX_NEW_TOKENS}" \
-        --temperature "${TEMPERATURE}" \
-        --top-p "${TOP_P}" \
-        --repetition-penalty "${REPETITION_PENALTY}" \
-        --chunk-size "${CHUNK_SIZE}" \
-        --torch-dtype "${TORCH_DTYPE}" \
-        --deepseek-dir "${DEEPSEEK_VL2_DIR}"
-  ) &
-  pids+=("$!")
-  active_jobs=$((active_jobs + 1))
-  if [ "${active_jobs}" -ge "${MAX_CONCURRENT_SHARDS}" ]; then
-    for pid in "${pids[@]}"; do
-      wait "${pid}"
-    done
-    pids=()
-    active_jobs=0
+if [ "${FINALIZE_SHARDS}" = "1" ]; then
+  if [ "${SHARD_COUNT}" -le 1 ]; then
+    echo "[error] FINALIZE_SHARDS=1 requires SHARD_COUNT > 1" >&2
+    exit 1
   fi
-done
-
-for pid in "${pids[@]}"; do
-  wait "${pid}"
-done
-
-rm -f "${RAW_RESULT_JSONL}"
-for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
-  shard_jsonl="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}/infer_result.jsonl"
-  if [ -f "${shard_jsonl}" ]; then
+  rm -f "${RAW_RESULT_JSONL}"
+  for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
+    shard_jsonl="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}/infer_result.jsonl"
+    if [ ! -f "${shard_jsonl}" ]; then
+      echo "[error] missing shard output: ${shard_jsonl}" >&2
+      exit 1
+    fi
     cat "${shard_jsonl}" >> "${RAW_RESULT_JSONL}"
-  fi
-done
+  done
+elif [ "${SHARD_COUNT}" -gt 1 ]; then
+  pids=()
+  active_jobs=0
+  for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
+    gpu="${GPU_ARRAY[$(( shard_id % ${#GPU_ARRAY[@]} ))]}"
+    shard_dir="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}"
+    shard_jsonl="${shard_dir}/infer_result.jsonl"
+    mkdir -p "${shard_dir}"
+
+    echo "[launch] shard=${shard_id}/${SHARD_COUNT} gpu=${gpu} out=${shard_jsonl}"
+    (
+      CUDA_VISIBLE_DEVICES="${gpu}" \
+        python "${TMP_PY}" \
+          --model-id "${MODEL_ID}" \
+          --meta-json "${META_JSON}" \
+          --output-jsonl "${shard_jsonl}" \
+          --shard-count "${SHARD_COUNT}" \
+          --shard-id "${shard_id}" \
+          --overwrite "${OVERWRITE}" \
+          --max-new-tokens "${MAX_NEW_TOKENS}" \
+          --temperature "${TEMPERATURE}" \
+          --top-p "${TOP_P}" \
+          --repetition-penalty "${REPETITION_PENALTY}" \
+          --chunk-size "${CHUNK_SIZE}" \
+          --torch-dtype "${TORCH_DTYPE}" \
+          --deepseek-dir "${DEEPSEEK_VL2_DIR}"
+    ) &
+    pids+=("$!")
+    active_jobs=$((active_jobs + 1))
+    if [ "${active_jobs}" -ge "${MAX_CONCURRENT_SHARDS}" ]; then
+      for pid in "${pids[@]}"; do
+        wait "${pid}"
+      done
+      pids=()
+      active_jobs=0
+    fi
+  done
+
+  for pid in "${pids[@]}"; do
+    wait "${pid}"
+  done
+
+  echo "[done] shard generation complete under ${RUN_DIR}/shard_*_of_${SHARD_COUNT}"
+  echo "[done] run FINALIZE_SHARDS=1 with the same RUN_TAG to merge shards and run verifier."
+  exit 0
+else
+  shard_jsonl="${RAW_RESULT_JSONL}"
+  echo "[launch] shard=0/1 gpu=${GPU_ARRAY[0]} out=${shard_jsonl}"
+  CUDA_VISIBLE_DEVICES="${GPU_ARRAY[0]}" \
+    python "${TMP_PY}" \
+      --model-id "${MODEL_ID}" \
+      --meta-json "${META_JSON}" \
+      --output-jsonl "${shard_jsonl}" \
+      --shard-count 1 \
+      --shard-id 0 \
+      --overwrite "${OVERWRITE}" \
+      --max-new-tokens "${MAX_NEW_TOKENS}" \
+      --temperature "${TEMPERATURE}" \
+      --top-p "${TOP_P}" \
+      --repetition-penalty "${REPETITION_PENALTY}" \
+      --chunk-size "${CHUNK_SIZE}" \
+      --torch-dtype "${TORCH_DTYPE}" \
+      --deepseek-dir "${DEEPSEEK_VL2_DIR}"
+fi
 
 cat > "${VERIFIER_SYSTEM_FILE}" <<'EOF'
 Infer the following features from <Explanation> and output: 
