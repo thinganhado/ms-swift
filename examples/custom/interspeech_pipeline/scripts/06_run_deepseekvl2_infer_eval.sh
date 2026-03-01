@@ -179,8 +179,15 @@ def _dtype_from_name(name):
 
 
 def _load_model(model_id, deepseek_dir, dtype):
-    if deepseek_dir and Path(deepseek_dir).exists():
-        sys.path.insert(0, deepseek_dir)
+    if deepseek_dir:
+        pkg_path = Path(deepseek_dir)
+        if pkg_path.exists():
+            # Accept either the repo root (containing deepseek_vl2/) or the
+            # package directory itself (.../deepseek_vl2).
+            if pkg_path.name == "deepseek_vl2":
+                sys.path.insert(0, str(pkg_path.parent))
+            else:
+                sys.path.insert(0, str(pkg_path))
 
     from transformers import AutoModelForCausalLM
     from deepseek_vl2.models import DeepseekVLV2Processor
