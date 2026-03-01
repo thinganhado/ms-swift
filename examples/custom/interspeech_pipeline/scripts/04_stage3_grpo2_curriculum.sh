@@ -10,6 +10,7 @@ GRPO2_PRED_JSON_IN="${GRPO2_PRED_JSON_IN:-/datasets/work/dss-deepfake-audio/work
 GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json}"
 GRPO2_PRED_JSON_SWIFT="${GRPO2_PRED_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred_swift_grpo2.json}"
 GRPO2_PRED_PREBUILT="${GRPO2_PRED_PREBUILT:-1}"
+Q2_SFT_INIT_CHECKPOINT="${Q2_SFT_INIT_CHECKPOINT:-}"
 OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
 RUN_TAG="${RUN_TAG:-v0-$(date +%Y%m%d-%H%M%S)}"
 OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_DIR_BASE%/}/${RUN_TAG}}"
@@ -56,6 +57,7 @@ echo "[run] RUN_TAG=${RUN_TAG}"
 echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
 echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
 echo "[run] GRPO2_PRED_PREBUILT=${GRPO2_PRED_PREBUILT}"
+echo "[run] Q2_SFT_INIT_CHECKPOINT=${Q2_SFT_INIT_CHECKPOINT:-<none>}"
 
 COMMON_ARGS=(
   --rlhf_type grpo
@@ -115,6 +117,12 @@ python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_datas
   --output-json "${GRPO2_GT_JSON_SWIFT}"
 
 if [[ "${USE_PRED_PHASE}" == "1" ]]; then
+  PRED_PHASE_RESUME_ARGS=()
+  if [[ -n "${Q2_SFT_INIT_CHECKPOINT}" ]]; then
+    PRED_PHASE_RESUME_ARGS=(
+      --resume_from_checkpoint "${Q2_SFT_INIT_CHECKPOINT}"
+    )
+  fi
   # ===== Phase 1: warmup on pred =====
   NPROC_PER_NODE="${NPROC_PER_NODE}" \
   CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
@@ -126,6 +134,7 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   swift rlhf \
     "${COMMON_ARGS[@]}" \
     --dataset "${GRPO2_PRED_JSON_SWIFT}" \
+    "${PRED_PHASE_RESUME_ARGS[@]}" \
     --num_train_epochs "${WARMUP_EPOCHS}" \
     --max_steps "${WARMUP_MAX_STEPS}"
 fi
@@ -139,10 +148,18 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   )
 else
   # ===== GT-only mode =====
-  GT_PHASE_EXTRA_ARGS=(
-    --num_train_epochs "${TOTAL_EPOCHS}"
-    --max_steps "${TOTAL_MAX_STEPS}"
-  )
+  if [[ -n "${Q2_SFT_INIT_CHECKPOINT}" ]]; then
+    GT_PHASE_EXTRA_ARGS=(
+      --resume_from_checkpoint "${Q2_SFT_INIT_CHECKPOINT}"
+      --num_train_epochs "${TOTAL_EPOCHS}"
+      --max_steps "${TOTAL_MAX_STEPS}"
+    )
+  else
+    GT_PHASE_EXTRA_ARGS=(
+      --num_train_epochs "${TOTAL_EPOCHS}"
+      --max_steps "${TOTAL_MAX_STEPS}"
+    )
+  fi
 fi
 
 NPROC_PER_NODE="${NPROC_PER_NODE}" \

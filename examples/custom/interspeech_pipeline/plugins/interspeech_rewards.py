@@ -118,6 +118,12 @@ class InterspeechPrompt1Reward(ORM):
         # gt_regions -> assistant -> solution -> sft_top3
         solution = kwargs.get("solution")
 
+        def _canonicalize_gt_text(text: str) -> str:
+            ids = _parse_ids(text)[:3]
+            if ids:
+                return f"[{', '.join(map(str, ids))}]"
+            return str(text or "").strip()
+
         def _pick_gt(i: int):
             candidates = [
                 ("gt_regions", gt_regions),
@@ -132,12 +138,12 @@ class InterspeechPrompt1Reward(ORM):
                     continue
                 text = str(src[i] if src[i] is not None else "").strip()
                 if text:
-                    return text, name
+                    return _canonicalize_gt_text(text), name
             # SFT-style fallback: extract assistant GT directly from messages.
             if messages is not None and i < len(messages):
                 msg_text = _extract_assistant_text_from_messages(messages[i])
                 if msg_text:
-                    return msg_text, "messages.assistant"
+                    return _canonicalize_gt_text(msg_text), "messages.assistant"
             return "", "none"
 
         rewards: List[float] = []
