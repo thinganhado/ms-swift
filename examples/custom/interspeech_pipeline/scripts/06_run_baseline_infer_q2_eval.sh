@@ -54,12 +54,13 @@ VLLM_DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-1}"
 VLLM_LIMIT_MM_PER_PROMPT="${VLLM_LIMIT_MM_PER_PROMPT:-}"
 SHARD_COUNT="${SHARD_COUNT:-1}"
 SHARD_ID="${SHARD_ID:-0}"
+FINALIZE_SHARDS="${FINALIZE_SHARDS:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_TAG="$(basename "${MODEL_ID%/}" | tr -cs 'A-Za-z0-9._-' '_')"
 BASE_RUN_DIR="${OUTPUT_BASE_DIR%/}/${MODEL_TAG}/${RUN_TAG}"
 RUN_DIR="${BASE_RUN_DIR}"
-if [ "${SHARD_COUNT}" -gt 1 ]; then
+if [ "${SHARD_COUNT}" -gt 1 ] && [ "${FINALIZE_SHARDS}" != "1" ]; then
   if [ "${SHARD_ID}" -lt 0 ] || [ "${SHARD_ID}" -ge "${SHARD_COUNT}" ]; then
     echo "[error] invalid shard config: SHARD_ID=${SHARD_ID}, SHARD_COUNT=${SHARD_COUNT}" >&2
     exit 1
@@ -77,7 +78,7 @@ SHARD_META_JSON="${RUN_DIR}/val_dataset_shard.json"
 
 mkdir -p "${RUN_DIR}"
 
-if [ "${SHARD_COUNT}" -gt 1 ]; then
+if [ "${SHARD_COUNT}" -gt 1 ] && [ "${FINALIZE_SHARDS}" != "1" ]; then
   python - <<'PY' "${META_JSON}" "${SHARD_META_JSON}" "${SHARD_ID}" "${SHARD_COUNT}"
 import json
 import math
@@ -118,6 +119,7 @@ echo "[run] VERIFIER_MODEL_ID=${VERIFIER_MODEL_ID}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
 echo "[run] SHARD_ID=${SHARD_ID}"
 echo "[run] SHARD_COUNT=${SHARD_COUNT}"
+echo "[run] FINALIZE_SHARDS=${FINALIZE_SHARDS}"
 if [ "${INFER_BACKEND}" = "vllm" ]; then
   echo "[run] VLLM_TP=${VLLM_TP}"
   echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
@@ -156,7 +158,28 @@ elif [ "${INFER_BACKEND}" = "vllm" ]; then
   fi
 fi
 
-swift infer "${SWIFT_INFER_ARGS[@]}"
+if [ "${FINALIZE_SHARDS}" = "1" ]; then
+  if [ "${SHARD_COUNT}" -le 1 ]; then
+    echo "[error] FINALIZE_SHARDS=1 requires SHARD_COUNT > 1" >&2
+    exit 1
+  fi
+  rm -f "${RAW_RESULT_JSONL}"
+  for (( merge_shard_id=0; merge_shard_id<SHARD_COUNT; merge_shard_id++ )); do
+    shard_jsonl="${BASE_RUN_DIR}/shard_${merge_shard_id}_of_${SHARD_COUNT}/infer_result.jsonl"
+    if [ ! -f "${shard_jsonl}" ]; then
+      echo "[error] missing shard output: ${shard_jsonl}" >&2
+      exit 1
+    fi
+    cat "${shard_jsonl}" >> "${RAW_RESULT_JSONL}"
+  done
+elif [ "${SHARD_COUNT}" -gt 1 ]; then
+  swift infer "${SWIFT_INFER_ARGS[@]}"
+  echo "[done] shard generation complete: ${RAW_RESULT_JSONL}"
+  echo "[done] run FINALIZE_SHARDS=1 with the same RUN_TAG to merge shards and run verifier."
+  exit 0
+else
+  swift infer "${SWIFT_INFER_ARGS[@]}"
+fi
 
 cat > "${VERIFIER_SYSTEM_FILE}" <<'EOF'
 Infer the following features from <Explanation> and output: 
