@@ -1,6 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
+CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
+
+mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
+  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" \
+  "${CACHE_ROOT}/vllm" "${CACHE_ROOT}/flashinfer"
+
+export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
+export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
+export HF_HOME="${CACHE_ROOT}/hf"
+export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
+export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export DATASETS_CACHE="${CACHE_ROOT}/datasets"
+export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
+export MODELSCOPE_HOME="${CACHE_ROOT}/modelscope"
+export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
+export VLLM_CONFIG_ROOT="${CACHE_ROOT}/vllm"
+export VLLM_NO_USAGE_STATS=1
+export FLASHINFER_WORKSPACE_BASE="${CACHE_ROOT}"
+export FLASHINFER_WORKSPACE_DIR="${CACHE_ROOT}/flashinfer"
+export FLASHINFER_JIT_CACHE_DIR="${FLASHINFER_WORKSPACE_DIR}"
+unset TRANSFORMERS_CACHE
+
 if [ -f "$HOME/.bashrc" ]; then
   source "$HOME/.bashrc"
 fi
@@ -23,7 +45,6 @@ VERIFIER_GT_CSV="${VERIFIER_GT_CSV:-/datasets/work/dss-deepfake-audio/work/data/
 VERIFIER_BATCH_SIZE="${VERIFIER_BATCH_SIZE:-8}"
 VERIFIER_TENSOR_PARALLEL_SIZE="${VERIFIER_TENSOR_PARALLEL_SIZE:-4}"
 VERIFIER_GPU_MEMORY_UTILIZATION="${VERIFIER_GPU_MEMORY_UTILIZATION:-0.85}"
-CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_TAG="$(basename "${MODEL_ID%/}" | tr -cs 'A-Za-z0-9._-' '_')"
@@ -36,24 +57,6 @@ VERIFIER_USER_FILE="${RUN_DIR}/q2_verifier_user.txt"
 EVAL_JSON="${RUN_DIR}/q2_eval_metrics.json"
 
 mkdir -p "${RUN_DIR}"
-mkdir -p "${CACHE_ROOT}/triton" "${CACHE_ROOT}/torch_extensions" "${CACHE_ROOT}/hf" \
-  "${CACHE_ROOT}/xdg_cache" "${CACHE_ROOT}/modelscope" "${CACHE_ROOT}/datasets" \
-  "${CACHE_ROOT}/vllm" "${CACHE_ROOT}/flashinfer"
-
-export TRITON_CACHE_DIR="${CACHE_ROOT}/triton"
-export TORCH_EXTENSIONS_DIR="${CACHE_ROOT}/torch_extensions"
-export HF_HOME="${CACHE_ROOT}/hf"
-export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
-export HF_DATASETS_CACHE="${CACHE_ROOT}/datasets"
-export DATASETS_CACHE="${CACHE_ROOT}/datasets"
-export MODELSCOPE_CACHE="${CACHE_ROOT}/modelscope"
-export XDG_CACHE_HOME="${CACHE_ROOT}/xdg_cache"
-export VLLM_CONFIG_ROOT="${CACHE_ROOT}/vllm"
-export VLLM_NO_USAGE_STATS=1
-export FLASHINFER_WORKSPACE_BASE="${CACHE_ROOT}"
-export FLASHINFER_WORKSPACE_DIR="${CACHE_ROOT}/flashinfer"
-export FLASHINFER_JIT_CACHE_DIR="${FLASHINFER_WORKSPACE_DIR}"
-unset TRANSFORMERS_CACHE
 
 echo "[run] MODEL_ID=${MODEL_ID}"
 echo "[run] META_JSON=${META_JSON}"
