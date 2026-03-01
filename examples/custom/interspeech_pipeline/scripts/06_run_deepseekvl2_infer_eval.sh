@@ -189,6 +189,13 @@ def _load_model(model_id, deepseek_dir, dtype):
             else:
                 sys.path.insert(0, str(pkg_path))
 
+    # DeepSeek-VL2 targets an older transformers API that still exposed
+    # LlamaFlashAttention2. On newer transformers builds, fall back to the
+    # regular attention class so the import path remains available.
+    import transformers.models.llama.modeling_llama as llama_mod
+    if not hasattr(llama_mod, "LlamaFlashAttention2") and hasattr(llama_mod, "LlamaAttention"):
+        llama_mod.LlamaFlashAttention2 = llama_mod.LlamaAttention
+
     from transformers import AutoModelForCausalLM
     from deepseek_vl2.models import DeepseekVLV2Processor
 
