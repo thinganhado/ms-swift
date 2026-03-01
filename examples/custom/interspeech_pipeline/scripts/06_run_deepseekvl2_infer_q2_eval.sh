@@ -42,6 +42,7 @@ RUN_TAG="${RUN_TAG:-deepseek_q2_eval_$(date +%Y%m%d_%H%M%S)}"
 SHARD_COUNT="${SHARD_COUNT:-4}"
 OVERWRITE="${OVERWRITE:-1}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
+MAX_CONCURRENT_SHARDS="${MAX_CONCURRENT_SHARDS:-1}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1024}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 TOP_P="${TOP_P:-0.95}"
@@ -77,6 +78,7 @@ echo "[run] VERIFIER_OUTPUT_DIR=${VERIFIER_OUTPUT_DIR}"
 echo "[run] EVAL_JSON=${EVAL_JSON}"
 echo "[run] SHARD_COUNT=${SHARD_COUNT}"
 echo "[run] GPU_IDS=${GPU_IDS}"
+echo "[run] MAX_CONCURRENT_SHARDS=${MAX_CONCURRENT_SHARDS}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
 
 cat > "${TMP_PY}" <<'PY'
@@ -85,6 +87,7 @@ import argparse
 import json
 import re
 import sys
+import types
 from pathlib import Path
 
 import torch
@@ -179,7 +182,24 @@ def _load_model(model_id, deepseek_dir, dtype):
     if not hasattr(llama_mod, "LlamaFlashAttention2") and hasattr(llama_mod, "LlamaAttention"):
         llama_mod.LlamaFlashAttention2 = llama_mod.LlamaAttention
 
+    try:
+        import xformers.ops  # noqa: F401
+    except Exception:
+        xformers_mod = types.ModuleType("xformers")
+        xformers_ops_mod = types.ModuleType("xformers.ops")
+
+        def memory_efficient_attention(q, k, v, attn_bias=None, p=0.0, scale=None, op=None):
+            dropout_p = p if p and torch.is_grad_enabled() else 0.0
+            return torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_bias, dropout_p=dropout_p, scale=scale)
+
+        xformers_ops_mod.memory_efficient_attention = memory_efficient_attention
+        xformers_mod.ops = xformers_ops_mod
+        sys.modules["xformers"] = xformers_mod
+        sys.modules["xformers.ops"] = xformers_ops_mod
+
     from transformers import AutoModelForCausalLM
+    from transformers.generation import GenerationMixin
     from deepseek_vl2.models import DeepseekVLV2Processor
 
     processor = DeepseekVLV2Processor.from_pretrained(model_id)
@@ -188,6 +208,8 @@ def _load_model(model_id, deepseek_dir, dtype):
         trust_remote_code=True,
         torch_dtype=dtype,
     )
+    if not hasattr(model, "generate"):
+        model.__class__.generate = GenerationMixin.generate
     model = model.cuda().eval()
     return model, processor
 
@@ -345,6 +367,7 @@ IFS=',' read -r -a GPU_ARRAY <<< "${GPU_IDS}"
 conda activate vllm
 
 pids=()
+active_jobs=0
 for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
   gpu="${GPU_ARRAY[$(( shard_id % ${#GPU_ARRAY[@]} ))]}"
   shard_dir="${RUN_DIR}/shard_${shard_id}_of_${SHARD_COUNT}"
@@ -370,6 +393,14 @@ for (( shard_id=0; shard_id<SHARD_COUNT; shard_id++ )); do
         --deepseek-dir "${DEEPSEEK_VL2_DIR}"
   ) &
   pids+=("$!")
+  active_jobs=$((active_jobs + 1))
+  if [ "${active_jobs}" -ge "${MAX_CONCURRENT_SHARDS}" ]; then
+    for pid in "${pids[@]}"; do
+      wait "${pid}"
+    done
+    pids=()
+    active_jobs=0
+  fi
 done
 
 for pid in "${pids[@]}"; do
