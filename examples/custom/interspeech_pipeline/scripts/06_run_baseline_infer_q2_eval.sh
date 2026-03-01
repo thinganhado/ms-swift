@@ -35,7 +35,7 @@ MODEL_ID="${MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val.json}"
 OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-eval/}"
 RUN_TAG="${RUN_TAG:-q2_eval_$(date +%Y%m%d_%H%M%S)}"
-INFER_BACKEND="${INFER_BACKEND:-transformers}"
+INFER_BACKEND="${INFER_BACKEND:-vllm}"
 MAX_BATCH_SIZE="${MAX_BATCH_SIZE:-8}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1024}"
 TEMPERATURE="${TEMPERATURE:-0}"
@@ -45,28 +45,69 @@ VERIFIER_GT_CSV="${VERIFIER_GT_CSV:-/datasets/work/dss-deepfake-audio/work/data/
 VERIFIER_BATCH_SIZE="${VERIFIER_BATCH_SIZE:-8}"
 VERIFIER_TENSOR_PARALLEL_SIZE="${VERIFIER_TENSOR_PARALLEL_SIZE:-4}"
 VERIFIER_GPU_MEMORY_UTILIZATION="${VERIFIER_GPU_MEMORY_UTILIZATION:-0.85}"
-VLLM_TP="${VLLM_TP:-1}"
+VLLM_TP="${VLLM_TP:-4}"
 VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.9}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-}"
 VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-256}"
 VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
 VLLM_DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-1}"
 VLLM_LIMIT_MM_PER_PROMPT="${VLLM_LIMIT_MM_PER_PROMPT:-}"
+SHARD_COUNT="${SHARD_COUNT:-1}"
+SHARD_ID="${SHARD_ID:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_TAG="$(basename "${MODEL_ID%/}" | tr -cs 'A-Za-z0-9._-' '_')"
-RUN_DIR="${OUTPUT_BASE_DIR%/}/${MODEL_TAG}/${RUN_TAG}"
+BASE_RUN_DIR="${OUTPUT_BASE_DIR%/}/${MODEL_TAG}/${RUN_TAG}"
+RUN_DIR="${BASE_RUN_DIR}"
+if [ "${SHARD_COUNT}" -gt 1 ]; then
+  if [ "${SHARD_ID}" -lt 0 ] || [ "${SHARD_ID}" -ge "${SHARD_COUNT}" ]; then
+    echo "[error] invalid shard config: SHARD_ID=${SHARD_ID}, SHARD_COUNT=${SHARD_COUNT}" >&2
+    exit 1
+  fi
+  RUN_DIR="${BASE_RUN_DIR}/shard_${SHARD_ID}_of_${SHARD_COUNT}"
+fi
 RAW_RESULT_JSONL="${RUN_DIR}/infer_result.jsonl"
 VERIFIER_INPUT_JSONL="${RUN_DIR}/en_only_for_verifier.jsonl"
 VERIFIER_OUTPUT_DIR="${RUN_DIR}/verifier"
 VERIFIER_SYSTEM_FILE="${RUN_DIR}/q2_verifier_system.txt"
 VERIFIER_USER_FILE="${RUN_DIR}/q2_verifier_user.txt"
 EVAL_JSON="${RUN_DIR}/q2_eval_metrics.json"
+INFER_META_JSON="${META_JSON}"
+SHARD_META_JSON="${RUN_DIR}/val_dataset_shard.json"
 
 mkdir -p "${RUN_DIR}"
 
+if [ "${SHARD_COUNT}" -gt 1 ]; then
+  python - <<'PY' "${META_JSON}" "${SHARD_META_JSON}" "${SHARD_ID}" "${SHARD_COUNT}"
+import json
+import math
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+shard_id = int(sys.argv[3])
+shard_count = int(sys.argv[4])
+
+rows = json.loads(src.read_text(encoding='utf-8'))
+if not isinstance(rows, list):
+    raise ValueError(f'Expected a JSON array in {src}')
+total = len(rows)
+shard_size = math.ceil(total / shard_count) if shard_count > 0 else total
+start = shard_id * shard_size
+end = min(start + shard_size, total)
+subset = rows[start:end]
+dst.write_text(json.dumps(subset, ensure_ascii=False), encoding='utf-8')
+print(f'shard_range: [{start}, {end})')
+print(f'shard_rows: {len(subset)} / {total}')
+print(f'saved_shard_meta: {dst}')
+PY
+  INFER_META_JSON="${SHARD_META_JSON}"
+fi
+
 echo "[run] MODEL_ID=${MODEL_ID}"
 echo "[run] META_JSON=${META_JSON}"
+echo "[run] INFER_META_JSON=${INFER_META_JSON}"
 echo "[run] RUN_DIR=${RUN_DIR}"
 echo "[run] RAW_RESULT_JSONL=${RAW_RESULT_JSONL}"
 echo "[run] VERIFIER_INPUT_JSONL=${VERIFIER_INPUT_JSONL}"
@@ -75,6 +116,8 @@ echo "[run] EVAL_JSON=${EVAL_JSON}"
 echo "[run] QWEN3_DIR=${QWEN3_DIR}"
 echo "[run] VERIFIER_MODEL_ID=${VERIFIER_MODEL_ID}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
+echo "[run] SHARD_ID=${SHARD_ID}"
+echo "[run] SHARD_COUNT=${SHARD_COUNT}"
 if [ "${INFER_BACKEND}" = "vllm" ]; then
   echo "[run] VLLM_TP=${VLLM_TP}"
   echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
@@ -89,7 +132,7 @@ cd "$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SWIFT_INFER_ARGS=(
   --model "${MODEL_ID}"
   --infer_backend "${INFER_BACKEND}"
-  --val_dataset "${META_JSON}"
+  --val_dataset "${INFER_META_JSON}"
   --max_new_tokens "${MAX_NEW_TOKENS}"
   --temperature "${TEMPERATURE}"
   --result_path "${RAW_RESULT_JSONL}"
@@ -135,7 +178,7 @@ cat > "${VERIFIER_USER_FILE}" <<'EOF'
 This is an artifact description for a spectrogram region: {description}. Please strictly follow the instructions to extract the information.
 EOF
 
-python - <<'PY' "${META_JSON}" "${RAW_RESULT_JSONL}" "${VERIFIER_INPUT_JSONL}"
+python - <<'PY' "${INFER_META_JSON}" "${RAW_RESULT_JSONL}" "${VERIFIER_INPUT_JSONL}"
 import json
 import re
 import sys
@@ -231,7 +274,7 @@ VLLM_ENFORCE_EAGER=1 \
 VLLM_GPU_MEMORY_UTILIZATION="${VERIFIER_GPU_MEMORY_UTILIZATION}" \
 bash run_qwen_region_full.sbatch
 
-python - <<'PY' "${META_JSON}" "${RAW_RESULT_JSONL}" "${VERIFIER_OUTPUT_DIR}" "${EVAL_JSON}"
+python - <<'PY' "${INFER_META_JSON}" "${RAW_RESULT_JSONL}" "${VERIFIER_OUTPUT_DIR}" "${EVAL_JSON}"
 import json
 import re
 import sys
