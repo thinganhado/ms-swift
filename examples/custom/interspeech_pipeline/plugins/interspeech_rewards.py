@@ -455,20 +455,18 @@ def _independent_extract_from_en(en_text: str) -> Dict[str, Optional[str]]:
 
 class InterspeechPrompt2Reward(ORM):
     """
-    Prompt-2 reward (overlap-masked):
-      R = (1/3) * sum_i (W_FMT*fmt_i + m_i*R_sup_i + (1-m_i)*R_rob_i)
+    Prompt-2 reward (position-aligned):
+      R = (1/3) * sum_i (W_FMT*fmt_i + W_CONS*cons_i + W_ACC*acc_i_if_gt_available)
 
     where:
-      R_sup_i = W_ACC*acc_i + W_CONS*cons_i
-      R_rob_i = W_BOUND*bound_i + W_UNC*unc_i + W_CONS_ROB*cons_i
+      - fmt_i is always computed
+      - cons_i is always computed
+      - acc_i is added only when the predicted slot maps to a GT region row
     """
 
-    W_ACC = 0.6
+    W_ACC = 1.0
     W_CONS = 0.3
     W_FMT = 0.1
-    W_BOUND = 0.1
-    W_UNC = 0.1
-    W_CONS_ROB = 0.0
 
     def __init__(self):
         super().__init__()
@@ -582,12 +580,8 @@ class InterspeechPrompt2Reward(ORM):
         tuple_fmt_sum = 0.0
         tuple_m_sum = 0.0
         sup_tuple_count = 0
-        rob_tuple_count = 0
         acc_sup_sum = 0.0
-        cons_sup_sum = 0.0
-        cons_rob_sum = 0.0
-        bound_rob_sum = 0.0
-        unc_rob_sum = 0.0
+        cons_all_sum = 0.0
         gt_tuple_available = 0
 
         debug_rows: List[Dict[str, object]] = []
@@ -644,31 +638,21 @@ class InterspeechPrompt2Reward(ORM):
                 tuple_m_sum += m_i
 
                 cons = self._consistency_score(pred)
+                cons_all_sum += cons
 
+                acc = 0.0
                 if m_i > 0.0:
                     sup_tuple_count += 1
                     gt = gt_by_cn.get(cn)
-                    if gt is None:
-                        acc = 0.0
-                    else:
+                    if gt is not None:
                         acc = (
                             (1.0 if pred.get("T") == gt.get("T") else 0.0)
                             + (1.0 if pred.get("F") == gt.get("F") else 0.0)
                             + (1.0 if pred.get("P") == gt.get("P") else 0.0)
                         ) / 3.0
                     acc_sup_sum += acc
-                    cons_sup_sum += cons
-                    r_sup = self.W_ACC * acc + self.W_CONS * cons
-                    total += self.W_FMT * fmt_i + r_sup
-                else:
-                    rob_tuple_count += 1
-                    bound = self._bound_score(pred)
-                    unc = self._unc_score(pred)
-                    cons_rob_sum += cons
-                    bound_rob_sum += bound
-                    unc_rob_sum += unc
-                    r_rob = self.W_BOUND * bound + self.W_UNC * unc + self.W_CONS_ROB * cons
-                    total += self.W_FMT * fmt_i + r_rob
+
+                total += self.W_FMT * fmt_i + self.W_CONS * cons + self.W_ACC * acc
 
             sample_reward = total / 3.0
             rewards.append(sample_reward)
@@ -699,10 +683,7 @@ class InterspeechPrompt2Reward(ORM):
             mean_tuple_fmt = (tuple_fmt_sum / tuple_total) if tuple_total > 0 else 0.0
             supervised_tuple_rate = (tuple_m_sum / tuple_total) if tuple_total > 0 else 0.0
             mean_acc_sup = (acc_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
-            mean_cons_sup = (cons_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
-            mean_cons_rob = (cons_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
-            mean_bound_rob = (bound_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
-            mean_unc_rob = (unc_rob_sum / rob_tuple_count) if rob_tuple_count > 0 else 0.0
+            mean_cons_all = (cons_all_sum / tuple_total) if tuple_total > 0 else 0.0
             gt_tuple_avail_rate = 100.0 * gt_tuple_available / total_n
 
             group_size = self._group_size_for_metrics
@@ -721,10 +702,7 @@ class InterspeechPrompt2Reward(ORM):
                 f"mean_tuple_fmt={mean_tuple_fmt:.4f} "
                 f"supervised_tuple_rate={supervised_tuple_rate:.4f} "
                 f"mean_acc_sup={mean_acc_sup:.4f} "
-                f"mean_cons_sup={mean_cons_sup:.4f} "
-                f"mean_bound_rob={mean_bound_rob:.4f} "
-                f"mean_unc_rob={mean_unc_rob:.4f} "
-                f"mean_cons_rob={mean_cons_rob:.4f} "
+                f"mean_cons_all={mean_cons_all:.4f} "
                 f"gt_tuple_avail_rate={gt_tuple_avail_rate:.2f}% "
                 f"reward_var_within_group={reward_var_within_group:.6f}",
                 flush=True,
