@@ -201,8 +201,12 @@ def _load_model(model_id, deepseek_dir, dtype):
         sys.modules["xformers.ops"] = xformers_ops_mod
 
     from transformers import AutoModelForCausalLM, GenerationConfig
+    from transformers.cache_utils import DynamicCache
     from transformers.generation import GenerationMixin
     from deepseek_vl2.models import DeepseekVLV2Processor
+
+    if not hasattr(DynamicCache, "seen_tokens"):
+        DynamicCache.seen_tokens = property(lambda self: self.get_seq_length())
 
     processor = DeepseekVLV2Processor.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
