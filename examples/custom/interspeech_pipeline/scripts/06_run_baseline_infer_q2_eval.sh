@@ -45,6 +45,13 @@ VERIFIER_GT_CSV="${VERIFIER_GT_CSV:-/datasets/work/dss-deepfake-audio/work/data/
 VERIFIER_BATCH_SIZE="${VERIFIER_BATCH_SIZE:-8}"
 VERIFIER_TENSOR_PARALLEL_SIZE="${VERIFIER_TENSOR_PARALLEL_SIZE:-4}"
 VERIFIER_GPU_MEMORY_UTILIZATION="${VERIFIER_GPU_MEMORY_UTILIZATION:-0.85}"
+VLLM_TP="${VLLM_TP:-1}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.9}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-256}"
+VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
+VLLM_DISABLE_CUSTOM_ALL_REDUCE="${VLLM_DISABLE_CUSTOM_ALL_REDUCE:-1}"
+VLLM_LIMIT_MM_PER_PROMPT="${VLLM_LIMIT_MM_PER_PROMPT:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_TAG="$(basename "${MODEL_ID%/}" | tr -cs 'A-Za-z0-9._-' '_')"
@@ -68,19 +75,45 @@ echo "[run] EVAL_JSON=${EVAL_JSON}"
 echo "[run] QWEN3_DIR=${QWEN3_DIR}"
 echo "[run] VERIFIER_MODEL_ID=${VERIFIER_MODEL_ID}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
+if [ "${INFER_BACKEND}" = "vllm" ]; then
+  echo "[run] VLLM_TP=${VLLM_TP}"
+  echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
+  echo "[run] VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN}"
+  echo "[run] VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS}"
+fi
 
 conda activate vllm
 
 cd "$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-swift infer \
-  --model "${MODEL_ID}" \
-  --infer_backend "${INFER_BACKEND}" \
-  --val_dataset "${META_JSON}" \
-  --max_batch_size "${MAX_BATCH_SIZE}" \
-  --max_new_tokens "${MAX_NEW_TOKENS}" \
-  --temperature "${TEMPERATURE}" \
+SWIFT_INFER_ARGS=(
+  --model "${MODEL_ID}"
+  --infer_backend "${INFER_BACKEND}"
+  --val_dataset "${META_JSON}"
+  --max_new_tokens "${MAX_NEW_TOKENS}"
+  --temperature "${TEMPERATURE}"
   --result_path "${RAW_RESULT_JSONL}"
+)
+
+if [ "${INFER_BACKEND}" = "transformers" ]; then
+  SWIFT_INFER_ARGS+=(--max_batch_size "${MAX_BATCH_SIZE}")
+elif [ "${INFER_BACKEND}" = "vllm" ]; then
+  SWIFT_INFER_ARGS+=(
+    --vllm_tensor_parallel_size "${VLLM_TP}"
+    --vllm_gpu_memory_utilization "${VLLM_GPU_MEMORY_UTILIZATION}"
+    --vllm_max_num_seqs "${VLLM_MAX_NUM_SEQS}"
+    --vllm_disable_custom_all_reduce "${VLLM_DISABLE_CUSTOM_ALL_REDUCE}"
+    --vllm_enforce_eager "${VLLM_ENFORCE_EAGER}"
+  )
+  if [ -n "${VLLM_MAX_MODEL_LEN}" ]; then
+    SWIFT_INFER_ARGS+=(--vllm_max_model_len "${VLLM_MAX_MODEL_LEN}")
+  fi
+  if [ -n "${VLLM_LIMIT_MM_PER_PROMPT}" ]; then
+    SWIFT_INFER_ARGS+=(--vllm_limit_mm_per_prompt "${VLLM_LIMIT_MM_PER_PROMPT}")
+  fi
+fi
+
+swift infer "${SWIFT_INFER_ARGS[@]}"
 
 cat > "${VERIFIER_SYSTEM_FILE}" <<'EOF'
 Infer the following features from <Explanation> and output: 
