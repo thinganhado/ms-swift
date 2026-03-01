@@ -332,6 +332,46 @@ import sys
 from pathlib import Path
 from statistics import mean
 
+
+def _meteor_score(gts, res):
+    try:
+        from pycocoevalcap.meteor.meteor import Meteor
+
+        class RobustMeteor(Meteor):
+            def _score(self, hypothesis_str, reference_list):
+                references = " ||| ".join(reference_list)
+                stat = self._stat(hypothesis_str, reference_list)
+                eval_line = "EVAL" + " ||| " + stat
+                self.meteor_p.stdin.write(f"{eval_line}\n")
+                self.meteor_p.stdin.flush()
+                score = float(self.meteor_p.stdout.readline().strip())
+                scores = list(map(float, self.meteor_p.stdout.readline().strip().split()))
+                return score, scores
+
+        scorer = RobustMeteor()
+        return scorer.compute_score(gts, res)
+    except Exception:
+        from nltk.translate.meteor_score import meteor_score as _nltk_meteor
+
+        keys = list(gts.keys())
+        sample_scores = []
+        for k in keys:
+            refs = gts[k]
+            hyp = res[k][0] if isinstance(res.get(k), list) and res[k] else ""
+            try:
+                sample_scores.append(_nltk_meteor(refs, hyp))
+            except Exception:
+                sample_scores.append(0.0)
+        score = sum(sample_scores) / max(len(sample_scores), 1)
+        return score, sample_scores
+
+
+def _rouge_l_score(gts, res):
+    from pycocoevalcap.rouge.rouge import Rouge
+
+    scorer = Rouge()
+    return scorer.compute_score(gts, res)
+
 meta_json = Path(sys.argv[1])
 raw_jsonl = Path(sys.argv[2])
 ver_dir = Path(sys.argv[3])
@@ -487,21 +527,20 @@ def _caption_scores(gt_caps, pred_caps):
     if not gt_caps:
         return scores
     try:
-        from caption_metrics import meteor_score, rouge_l_score
         gts = {i: [gt] for i, gt in enumerate(gt_caps)}
         res = {i: [pd] for i, pd in enumerate(pred_caps)}
-        rouge_l, _ = rouge_l_score(gts, res)
-        meteor, _ = meteor_score(gts, res)
+        rouge_l, _ = _rouge_l_score(gts, res)
+        meteor, _ = _meteor_score(gts, res)
         scores["ROUGE_L"] = float(rouge_l)
         scores["METEOR"] = float(meteor)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[warn] caption ROUGE/METEOR unavailable: {e}", file=sys.stderr)
     try:
         from bert_score import score as bert_score
         _, _, f1 = bert_score(pred_caps, gt_caps, lang="en", verbose=False)
         scores["BERTScore_F1"] = float(f1.mean().item())
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[warn] caption BERTScore unavailable: {e}", file=sys.stderr)
     return scores
 
 meta_rows = json.loads(meta_json.read_text(encoding="utf-8"))
