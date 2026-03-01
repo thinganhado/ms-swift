@@ -212,6 +212,7 @@ src = Path(sys.argv[2])
 dst = Path(sys.argv[3])
 
 en_pat = re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S)
+region_heading_pat = re.compile(r'(?im)^[ \t>#*\-]*Region ID\s+(\d+)\s*:?[ \t*]*$')
 
 def norm(x):
     return str(x or "").strip()
@@ -226,6 +227,40 @@ def get_response(obj):
             return norm(msg.get("content"))
     return ""
 
+def parse_response_regions(response, prompt_ids):
+    slot_matches = {int(i): norm(txt) for i, txt in en_pat.findall(response)}
+    rows = []
+    if slot_matches:
+        for slot in (1, 2, 3):
+            if slot not in slot_matches:
+                continue
+            region_id = prompt_ids[slot - 1] if len(prompt_ids) >= slot else None
+            if region_id is None:
+                continue
+            rows.append((slot, region_id, slot_matches[slot]))
+        if rows:
+            return rows
+
+    matches = list(region_heading_pat.finditer(response))
+    if not matches:
+        return rows
+
+    prompt_id_to_slot = {region_id: idx + 1 for idx, region_id in enumerate(prompt_ids[:3])}
+    for idx, match in enumerate(matches):
+        region_id = int(match.group(1))
+        slot = prompt_id_to_slot.get(region_id)
+        if slot is None:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(response)
+        explanation = norm(response[start:end])
+        if not explanation:
+            explanation = norm(response[match.start():end])
+        if not explanation:
+            continue
+        rows.append((slot, region_id, explanation))
+    return rows
+
 meta_rows = json.loads(meta.read_text(encoding="utf-8"))
 rows = []
 with src.open("r", encoding="utf-8") as f:
@@ -239,23 +274,16 @@ with src.open("r", encoding="utf-8") as f:
             continue
 
         response = get_response(obj)
-        matches = {int(i): txt for i, txt in en_pat.findall(response)}
         meta_row = meta_rows[idx] if idx < len(meta_rows) and isinstance(meta_rows[idx], dict) else {}
         sample_id = norm(obj.get("sample_id")) or norm(meta_row.get("sample_id"))
         prompt1_output = norm(obj.get("prompt1_output")) or norm(meta_row.get("prompt1_output"))
         ids = [int(x) for x in re.findall(r"\d+", prompt1_output)][:3]
 
-        for slot in (1, 2, 3):
-            if slot not in matches:
-                continue
-            region_id = ids[slot - 1] if len(ids) >= slot else None
-            if region_id is None:
-                continue
-            explanation = f"<Explanation>{matches[slot]}</Explanation>"
+        for slot, region_id, explanation_text in parse_response_regions(response, ids):
             rows.append({
                 "sample_id": sample_id,
                 "region_id": region_id,
-                "response": explanation,
+                "response": f"<Explanation>{explanation_text}</Explanation>",
                 "raw_response": response,
                 "slot": slot,
             })
@@ -270,8 +298,8 @@ PY
 
 if [ ! -s "${VERIFIER_INPUT_JSONL}" ]; then
   echo "[error] verifier input is empty: ${VERIFIER_INPUT_JSONL}" >&2
-  echo "[error] No En1/En2/En3 explanations were extracted from ${RAW_RESULT_JSONL}." >&2
-  echo "[error] Check the model outputs in ${RAW_RESULT_JSONL}; this pipeline expects fields like En1=\"...\"." >&2
+  echo "[error] No region explanations were extracted from ${RAW_RESULT_JSONL}." >&2
+  echo "[error] Check the model outputs in ${RAW_RESULT_JSONL}; this pipeline expects either En1=\"...\" fields or Region ID sections." >&2
   exit 1
 fi
 
@@ -334,6 +362,7 @@ slot_pat = {
     "P": re.compile(r'\bP([123])\s*=\s*([^,;)\n]+)', re.I),
     "En": re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S),
 }
+region_heading_pat = re.compile(r'(?im)^[ \t>#*\-]*Region ID\s+(\d+)\s*:?[ \t*]*$')
 
 def norm(x):
     return str(x or "").strip()
@@ -362,6 +391,31 @@ def parse_indexed_tuple_text(text):
             idx = int(idx)
             out.setdefault(idx, {})
             out[idx][name] = norm(val)
+    return out
+
+def parse_predicted_sections(text, prompt_ids):
+    parsed = parse_indexed_tuple_text(text)
+    if any(norm(section.get("En")) for section in parsed.values()):
+        return {slot: norm(section.get("En")) for slot, section in parsed.items()}
+
+    matches = list(region_heading_pat.finditer(text))
+    if not matches:
+        return {}
+
+    prompt_id_to_slot = {region_id: idx + 1 for idx, region_id in enumerate(prompt_ids[:3])}
+    out = {}
+    for idx, match in enumerate(matches):
+        region_id = int(match.group(1))
+        slot = prompt_id_to_slot.get(region_id)
+        if slot is None:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        explanation = norm(text[start:end])
+        if not explanation:
+            explanation = norm(text[match.start():end])
+        if explanation:
+            out[slot] = explanation
     return out
 
 def _normalize_time(value):
@@ -487,9 +541,10 @@ with raw_jsonl.open("r", encoding="utf-8") as f:
             continue
         meta_row = meta_rows[idx] if idx < len(meta_rows) and isinstance(meta_rows[idx], dict) else {}
         sample_id = norm(obj.get("sample_id")) or norm(meta_row.get("sample_id"))
-        parsed = parse_indexed_tuple_text(get_response(obj))
+        prompt_ids = parse_prompt_ids(obj.get("prompt1_output") or meta_row.get("prompt1_output"))
+        parsed = parse_predicted_sections(get_response(obj), prompt_ids)
         for slot in (1, 2, 3):
-            pred_en_by_sample_slot[(sample_id, slot)] = norm(parsed.get(slot, {}).get("En"))
+            pred_en_by_sample_slot[(sample_id, slot)] = norm(parsed.get(slot))
 
 verifier_by_key = {}
 for p in ver_dir.rglob("*.json"):
