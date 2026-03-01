@@ -23,7 +23,7 @@ OVERWRITE="${OVERWRITE:-1}"
 RUN_TAG="${RUN_TAG:-eval_$(date +%Y%m%d_%H%M%S)}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
-ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-flash_attention_2}"
+ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 
 MODEL_TAG="$(basename "${MODEL_ID%/}" | tr -cs 'A-Za-z0-9._-' '_')"
 RUN_DIR="${OUTPUT_BASE_DIR%/}/${MODEL_TAG}/${RUN_TAG}"
@@ -129,19 +129,41 @@ def _prepare_messages(row):
 
 
 def _load_model(model_id, attn_impl):
-    from transformers import AutoModelForCausalLM, AutoProcessor
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
 
-    processor_kwargs = {"trust_remote_code": True}
+    processor_kwargs = {
+        "trust_remote_code": True,
+        "use_fast": False,
+        "fix_mistral_regex": True,
+    }
     model_kwargs = {
-        "torch_dtype": "auto",
+        "dtype": "auto",
         "device_map": "auto",
         "trust_remote_code": True,
     }
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
     if attn_impl:
+        # Force attention implementation through config as well, since some
+        # custom model paths ignore the from_pretrained kwarg and read only
+        # config internals during init.
+        for attr in ("_attn_implementation", "_attn_implementation_internal"):
+            try:
+                setattr(config, attr, attn_impl)
+            except Exception:
+                pass
+        for sub_name in ("text_config", "vision_config"):
+            sub = getattr(config, sub_name, None)
+            if sub is None:
+                continue
+            for attr in ("_attn_implementation", "_attn_implementation_internal"):
+                try:
+                    setattr(sub, attr, attn_impl)
+                except Exception:
+                    pass
         model_kwargs["attn_implementation"] = attn_impl
 
     processor = AutoProcessor.from_pretrained(model_id, **processor_kwargs)
-    model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(model_id, config=config, **model_kwargs)
     return model, processor
 
 
