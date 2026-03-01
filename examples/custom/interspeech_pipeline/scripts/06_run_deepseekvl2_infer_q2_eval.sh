@@ -200,7 +200,7 @@ def _load_model(model_id, deepseek_dir, dtype):
         sys.modules["xformers"] = xformers_mod
         sys.modules["xformers.ops"] = xformers_ops_mod
 
-    from transformers import AutoModelForCausalLM
+    from transformers import AutoModelForCausalLM, GenerationConfig
     from transformers.generation import GenerationMixin
     from deepseek_vl2.models import DeepseekVLV2Processor
 
@@ -217,6 +217,8 @@ def _load_model(model_id, deepseek_dir, dtype):
             if hasattr(model.__class__, attr_name):
                 continue
             setattr(model.__class__, attr_name, attr_value)
+    if getattr(model, "generation_config", None) is None:
+        model.generation_config = GenerationConfig.from_model_config(model.config)
     model = model.cuda().eval()
     return model, processor
 
