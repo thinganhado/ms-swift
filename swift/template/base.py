@@ -204,18 +204,22 @@ class Template(ProcessorMixin):
     @staticmethod
     def _load_image(image, load_images: bool):
         if load_images:
-            if isinstance(image, dict) and 'bytes' in image:
-                image = image['bytes'] or image['path']
+            if isinstance(image, dict):
+                path = image.get('path')
+                if path and (path.startswith('http') or os.path.exists(path)):
+                    image = path
+                elif 'bytes' in image:
+                    image = image['bytes'] or path
             image = load_image(image)
         else:
             if isinstance(image, dict):
-                path = image['path']
+                path = image.get('path')
                 if path and (path.startswith('http') or os.path.exists(path)):
                     image = path
                 else:
-                    image = load_image(image['bytes'])
-            elif not isinstance(image, str):
-                image = load_image(image)
+                    image = load_image(image.get('bytes'))
+        elif not isinstance(image, str):
+            image = load_image(image)
         return image
 
     @staticmethod
