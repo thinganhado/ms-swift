@@ -218,8 +218,8 @@ class Template(ProcessorMixin):
                     image = path
                 else:
                     image = load_image(image.get('bytes'))
-        elif not isinstance(image, str):
-            image = load_image(image)
+            elif not isinstance(image, str):
+                image = load_image(image)
         return image
 
     @staticmethod
