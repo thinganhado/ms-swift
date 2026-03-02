@@ -71,6 +71,14 @@ def _extract_image_from_messages(messages: Any) -> str:
     return ""
 
 
+def _extract_image(item: Dict[str, Any]) -> str:
+    for k in ("image", "img_path", "p1"):
+        img = _norm(item.get(k))
+        if img:
+            return img
+    return _extract_image_from_messages(item.get("messages") or item.get("conversations"))
+
+
 def _extract_text_from_messages(messages: Any, prefer_role: str = "assistant") -> str:
     if not isinstance(messages, list):
         return ""
@@ -202,10 +210,12 @@ def _build_row(
     spec_root: Path,
     user_template: str,
     raw_pred: str,
+    image_path: str,
 ) -> Dict[str, Any]:
     prompt1_output = f"[{', '.join(map(str, ids))}]" if ids else ""
     user_text = user_template.format(prompt1_output=prompt1_output, transcript=transcript)
-    image_path = str((spec_root / f"{sample_id}{DEFAULT_IMAGE_SUFFIX}").as_posix())
+    if not image_path:
+        image_path = str((spec_root / f"{sample_id}{DEFAULT_IMAGE_SUFFIX}").as_posix())
     return {
         "sample_id": sample_id,
         "prompt1_output": prompt1_output,
@@ -324,6 +334,7 @@ def main() -> None:
             continue
 
         transcript = _extract_transcript(item, mfa_root, sample_id)
+        image_path = _extract_image(item)
         rec = _build_row(
             sample_id=sample_id,
             ids=ids,
@@ -331,6 +342,7 @@ def main() -> None:
             spec_root=spec_root,
             user_template=args.user_template,
             raw_pred=pred_text,
+            image_path=image_path,
         )
         if sample_id in gt_regions_map:
             rec["gt_regions"] = ",".join(map(str, gt_regions_map[sample_id]))
