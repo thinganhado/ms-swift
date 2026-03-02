@@ -62,7 +62,7 @@ echo "[run] Q2_SFT_INIT_CHECKPOINT=${Q2_SFT_INIT_CHECKPOINT:-<none>}"
 get_latest_output_checkpoint() {
   local checkpoint_dir
   checkpoint_dir="$(
-    find "${OUTPUT_DIR}" -maxdepth 1 -mindepth 1 -type d -name 'checkpoint-*' 2>/dev/null \
+    find "${OUTPUT_DIR}" -type d -name 'checkpoint-*' 2>/dev/null \
       | sort -V \
       | tail -n 1
   )"
@@ -158,6 +158,7 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
     echo "[error] No checkpoint-* directory found in OUTPUT_DIR after pred warmup: ${OUTPUT_DIR}" >&2
     exit 1
   fi
+  echo "[run] GT phase resume checkpoint: ${GT_PHASE_RESUME_CHECKPOINT}"
   GT_PHASE_EXTRA_ARGS=(
     --resume_from_checkpoint "${GT_PHASE_RESUME_CHECKPOINT}"
     --num_train_epochs "${TOTAL_EPOCHS}"
