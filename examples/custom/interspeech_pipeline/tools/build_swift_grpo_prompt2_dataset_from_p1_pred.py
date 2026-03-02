@@ -14,6 +14,7 @@ DEFAULT_MFA_ROOT = "/scratch3/che489/Ha/interspeech/datasets/vocv4_mfa_aligned"
 DEFAULT_IMAGE_SUFFIX = "_grid_img_edge_number_axes.png"
 DEFAULT_GT_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_phone_table_topk3.csv"
 DEFAULT_DIFF_CSV = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/img/final_mask_topk/region_diff_stats.csv"
+DEFAULT_GT_JSON = "/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json"
 
 
 def _norm(x: Any) -> str:
@@ -134,7 +135,7 @@ def _infer_sample_id(item: Dict[str, Any], image_suffix: str) -> str:
 
 def _extract_prediction_text(item: Dict[str, Any]) -> str:
     # Preferred known keys from inference outputs.
-    for k in ("response", "pred_top3", "prediction", "output", "assistant"):
+    for k in ("p1_raw_pred", "prompt1_output", "response", "pred_top3", "prediction", "output", "assistant"):
         t = _norm(item.get(k))
         if t:
             return t
@@ -203,6 +204,28 @@ def _load_gt_regions_map(gt_csv: Path, overlap_map: Dict[tuple, float]) -> Dict[
     return out
 
 
+def _load_gt_image_map(gt_json: Path) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not gt_json.exists():
+        return out
+    try:
+        data = json.loads(gt_json.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return out
+    if not isinstance(data, list):
+        return out
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        sample_id = _norm(row.get("sample_id"))
+        if not sample_id:
+            continue
+        image_path = _extract_image(row)
+        if image_path:
+            out[sample_id] = image_path
+    return out
+
+
 def _build_row(
     sample_id: str,
     ids: List[int],
@@ -252,6 +275,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_GT_CSV,
         help="GT CSV used to attach gt_regions for overlap mask reward.",
     )
+    ap.add_argument(
+        "--gt-json",
+        default=DEFAULT_GT_JSON,
+        help="Optional GT prompt2 JSON used as the image-path source by sample_id.",
+    )
     ap.add_argument("--diff-csv", default=DEFAULT_DIFF_CSV, help="Optional overlap CSV for ordering GT top3.")
     ap.add_argument("--image-suffix", default=DEFAULT_IMAGE_SUFFIX)
     ap.add_argument("--sample-id-contains", default="_LA_T_")
@@ -297,11 +325,15 @@ def main() -> None:
     spec_root = Path(args.spec_root).expanduser().resolve()
     mfa_root = Path(args.mfa_root).expanduser().resolve()
     gt_regions_map: Dict[str, List[int]] = {}
+    gt_image_map: Dict[str, str] = {}
     gt_csv = Path(args.gt_csv).expanduser().resolve() if args.gt_csv else Path("")
+    gt_json = Path(args.gt_json).expanduser().resolve() if args.gt_json else Path("")
     diff_csv = Path(args.diff_csv).expanduser().resolve() if args.diff_csv else Path("")
     if str(gt_csv) and gt_csv.exists():
         overlap_map = _load_overlap_map(diff_csv) if str(diff_csv) and diff_csv.exists() else {}
         gt_regions_map = _load_gt_regions_map(gt_csv, overlap_map)
+    if str(gt_json) and gt_json.exists():
+        gt_image_map = _load_gt_image_map(gt_json)
 
     data = _load_records(args)
 
@@ -334,7 +366,7 @@ def main() -> None:
             continue
 
         transcript = _extract_transcript(item, mfa_root, sample_id)
-        image_path = _extract_image(item)
+        image_path = gt_image_map.get(sample_id) or _extract_image(item)
         rec = _build_row(
             sample_id=sample_id,
             ids=ids,
