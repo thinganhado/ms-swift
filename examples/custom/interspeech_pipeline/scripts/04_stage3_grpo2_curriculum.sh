@@ -59,6 +59,18 @@ echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
 echo "[run] GRPO2_PRED_PREBUILT=${GRPO2_PRED_PREBUILT}"
 echo "[run] Q2_SFT_INIT_CHECKPOINT=${Q2_SFT_INIT_CHECKPOINT:-<none>}"
 
+get_latest_output_checkpoint() {
+  local checkpoint_dir
+  checkpoint_dir="$(
+    find "${OUTPUT_DIR}" -maxdepth 1 -mindepth 1 -type d -name 'checkpoint-*' 2>/dev/null \
+      | sort -V \
+      | tail -n 1
+  )"
+  if [[ -n "${checkpoint_dir}" ]]; then
+    printf '%s\n' "${checkpoint_dir}"
+  fi
+}
+
 COMMON_ARGS=(
   --rlhf_type grpo
   --model "${BASE_MODEL_ID}"
@@ -141,8 +153,13 @@ fi
 
 if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   # ===== Phase 2: continue on GT =====
+  GT_PHASE_RESUME_CHECKPOINT="$(get_latest_output_checkpoint)"
+  if [[ -z "${GT_PHASE_RESUME_CHECKPOINT}" ]]; then
+    echo "[error] No checkpoint-* directory found in OUTPUT_DIR after pred warmup: ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
   GT_PHASE_EXTRA_ARGS=(
-    --resume_from_checkpoint true
+    --resume_from_checkpoint "${GT_PHASE_RESUME_CHECKPOINT}"
     --num_train_epochs "${TOTAL_EPOCHS}"
     --max_steps "${TOTAL_MAX_STEPS}"
   )
