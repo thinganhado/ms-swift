@@ -154,8 +154,10 @@ def load_file(path: Union[str, bytes, _T]) -> Union[BytesIO, _T]:
                 data = base64.b64decode(data)
                 res = BytesIO(data)
             else:
-                with open(path, 'rb') as f:
-                    res = BytesIO(f.read())
+                # Keep local file paths as paths so PIL can open them directly.
+                # This avoids an unnecessary BytesIO conversion that can fail
+                # even when the underlying image file is valid on disk.
+                res = path
     elif isinstance(path, bytes):
         res = BytesIO(path)
     return res
@@ -164,6 +166,8 @@ def load_file(path: Union[str, bytes, _T]) -> Union[BytesIO, _T]:
 def load_image(image: Union[str, bytes, Image.Image]) -> Image.Image:
     image = load_file(image)
     if isinstance(image, BytesIO):
+        image = Image.open(image)
+    elif isinstance(image, (str, os.PathLike)):
         image = Image.open(image)
     if image.mode != 'RGB':
         image = image.convert('RGB')
