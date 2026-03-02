@@ -453,6 +453,42 @@ def _independent_extract_from_en(en_text: str) -> Dict[str, Optional[str]]:
     }
 
 
+def _tokenize_for_rouge(text: str) -> List[str]:
+    return [tok for tok in re.findall(r"\w+|[^\w\s]", str(text or "").lower()) if tok.strip()]
+
+
+def _lcs_len(a: Sequence[str], b: Sequence[str]) -> int:
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        curr = [0] * (len(b) + 1)
+        ai = a[i - 1]
+        for j in range(1, len(b) + 1):
+            if ai == b[j - 1]:
+                curr[j] = prev[j - 1] + 1
+            else:
+                curr[j] = max(prev[j], curr[j - 1])
+        prev = curr
+    return prev[-1]
+
+
+def _rouge_l_f1(pred_text: str, ref_text: str) -> float:
+    pred_tokens = _tokenize_for_rouge(pred_text)
+    ref_tokens = _tokenize_for_rouge(ref_text)
+    if not pred_tokens or not ref_tokens:
+        return 0.0
+    lcs = _lcs_len(pred_tokens, ref_tokens)
+    if lcs <= 0:
+        return 0.0
+    precision = lcs / len(pred_tokens)
+    recall = lcs / len(ref_tokens)
+    denom = precision + recall
+    if denom <= 0:
+        return 0.0
+    return 2.0 * precision * recall / denom
+
+
 class InterspeechPrompt2Reward(ORM):
     """
     Prompt-2 reward (position-aligned):
@@ -464,9 +500,10 @@ class InterspeechPrompt2Reward(ORM):
       - acc_i is added only when the predicted slot maps to a GT region row
     """
 
-    W_ACC = 1.0
-    W_CONS = 0.3
+    W_ACC = 0.5
+    W_CONS = 0.1
     W_FMT = 0.1
+    W_ROUGE = 1.0
 
     def __init__(self):
         super().__init__()
@@ -582,6 +619,7 @@ class InterspeechPrompt2Reward(ORM):
         sup_tuple_count = 0
         acc_sup_sum = 0.0
         cons_all_sum = 0.0
+        rouge_sup_sum = 0.0
         gt_tuple_available = 0
 
         debug_rows: List[Dict[str, object]] = []
@@ -641,6 +679,7 @@ class InterspeechPrompt2Reward(ORM):
                 cons_all_sum += cons
 
                 acc = 0.0
+                rouge_l_en = 0.0
                 if m_i > 0.0:
                     sup_tuple_count += 1
                     gt = gt_by_cn.get(cn)
@@ -650,9 +689,11 @@ class InterspeechPrompt2Reward(ORM):
                             + (1.0 if pred.get("F") == gt.get("F") else 0.0)
                             + (1.0 if pred.get("P") == gt.get("P") else 0.0)
                         ) / 3.0
+                        rouge_l_en = _rouge_l_f1(pred.get("En", ""), gt.get("En", ""))
                     acc_sup_sum += acc
+                    rouge_sup_sum += rouge_l_en
 
-                total += self.W_FMT * fmt_i + self.W_CONS * cons + self.W_ACC * acc
+                total += self.W_FMT * fmt_i + self.W_CONS * cons + self.W_ACC * acc + self.W_ROUGE * rouge_l_en
 
             sample_reward = total / 3.0
             rewards.append(sample_reward)
@@ -683,6 +724,7 @@ class InterspeechPrompt2Reward(ORM):
             mean_tuple_fmt = (tuple_fmt_sum / tuple_total) if tuple_total > 0 else 0.0
             supervised_tuple_rate = (tuple_m_sum / tuple_total) if tuple_total > 0 else 0.0
             mean_acc_sup = (acc_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
+            mean_rouge_sup = (rouge_sup_sum / sup_tuple_count) if sup_tuple_count > 0 else 0.0
             mean_cons_all = (cons_all_sum / tuple_total) if tuple_total > 0 else 0.0
             gt_tuple_avail_rate = 100.0 * gt_tuple_available / total_n
 
@@ -702,6 +744,7 @@ class InterspeechPrompt2Reward(ORM):
                 f"mean_tuple_fmt={mean_tuple_fmt:.4f} "
                 f"supervised_tuple_rate={supervised_tuple_rate:.4f} "
                 f"mean_acc_sup={mean_acc_sup:.4f} "
+                f"mean_rougeL_sup={mean_rouge_sup:.4f} "
                 f"mean_cons_all={mean_cons_all:.4f} "
                 f"gt_tuple_avail_rate={gt_tuple_avail_rate:.2f}% "
                 f"reward_var_within_group={reward_var_within_group:.6f}",
