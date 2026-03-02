@@ -83,7 +83,7 @@ COMMON_ARGS=(
   --vllm_gpu_memory_utilization "${VLLM_GPU_MEMORY_UTILIZATION}"
   --sleep_level "${SLEEP_LEVEL}"
   --beta 0.1
-  --num_generations 4
+  --num_generations 8
   --temperature 0.9
   --tuner_type lora
   --lora_rank 8
