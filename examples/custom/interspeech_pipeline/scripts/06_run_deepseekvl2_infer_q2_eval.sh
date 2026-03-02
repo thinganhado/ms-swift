@@ -209,6 +209,8 @@ def _load_model(model_id, deepseek_dir, dtype):
         DynamicCache.seen_tokens = property(lambda self: self.get_seq_length())
     if not hasattr(DynamicCache, "get_max_length"):
         DynamicCache.get_max_length = lambda self: None
+    if not hasattr(DynamicCache, "get_usable_length"):
+        DynamicCache.get_usable_length = lambda self, seq_length, layer_idx=0: self.get_seq_length()
 
     processor = DeepseekVLV2Processor.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
