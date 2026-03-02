@@ -203,6 +203,22 @@ class Template(ProcessorMixin):
 
     @staticmethod
     def _load_image(image, load_images: bool):
+        print(
+            "[img_dbg]",
+            "type=",
+            type(image).__name__,
+            "is_str=",
+            isinstance(image, str),
+            "is_dict=",
+            isinstance(image, dict),
+            flush=True,
+        )
+        if isinstance(image, dict):
+            print(
+                "[img_dbg.dict]",
+                {k: (type(v).__name__, (v if k == 'path' else None)) for k, v in image.items()},
+                flush=True,
+            )
         if load_images:
             if isinstance(image, dict):
                 path = image.get('path')
