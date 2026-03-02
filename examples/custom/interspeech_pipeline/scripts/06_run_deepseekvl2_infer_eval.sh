@@ -208,7 +208,31 @@ def _load_model(model_id, deepseek_dir, dtype):
     if not hasattr(DynamicCache, "get_max_length"):
         DynamicCache.get_max_length = lambda self: None
     if not hasattr(DynamicCache, "get_usable_length"):
-        DynamicCache.get_usable_length = lambda self, seq_length, layer_idx=0: self.get_seq_length()
+        def _compat_get_usable_length(self, new_seq_length, layer_idx=0):
+            prev_seq_length = 0
+            key_cache = getattr(self, "key_cache", None)
+            if isinstance(key_cache, (list, tuple)) and 0 <= layer_idx < len(key_cache):
+                cached = key_cache[layer_idx]
+                if cached is not None:
+                    try:
+                        prev_seq_length = int(cached.shape[-2])
+                    except Exception:
+                        prev_seq_length = 0
+            else:
+                try:
+                    prev_seq_length = int(self.get_seq_length(layer_idx))
+                except TypeError:
+                    try:
+                        prev_seq_length = int(self.get_seq_length())
+                    except Exception:
+                        prev_seq_length = 0
+                except Exception:
+                    prev_seq_length = 0
+            max_length = self.get_max_length()
+            if max_length is not None and prev_seq_length + new_seq_length > max_length:
+                return max(0, max_length - new_seq_length)
+            return prev_seq_length
+        DynamicCache.get_usable_length = _compat_get_usable_length
 
     processor = DeepseekVLV2Processor.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
