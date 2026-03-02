@@ -151,6 +151,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
         self.grpo_p2_retry_missing_fields = os.getenv('GRPO_P2_RETRY_MISSING_FIELDS', '0').lower() in {
             '1', 'true', 'yes', 'on'
         }
+        self.grpo_p2_max_retries = max(0, int(os.getenv('GRPO_P2_MAX_RETRIES', '8')))
 
         self.disable_rollout_importance_sampling = False
 
@@ -1481,7 +1482,11 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                                       ) if self.request_config.temperature is not None else 1.0
                     base_top_p = float(self.request_config.top_p) if self.request_config.top_p is not None else 0.95
                     base_top_p = max(base_top_p, 0.95)
-                    for retry_idx in range(self.grpo_dedupe_max_retries):
+                    retry_budget = self.grpo_dedupe_max_retries
+                    if cur_missing_fields:
+                        retry_budget = max(retry_budget, self.grpo_p2_max_retries)
+
+                    for retry_idx in range(retry_budget):
                         total_retried += 1
                         retry_request_config = deepcopy(self.request_config)
                         retry_request_config.temperature = min(base_temp + 0.1 * (retry_idx + 1), 1.6)
@@ -1547,6 +1552,7 @@ class RolloutTrainerMixin(RLHFTrainerMixin):
                     f'gt_feedback={self.grpo_retry_use_gt_feedback}, '
                     f'require_improvement={self.grpo_retry_require_improvement}, '
                     f'p2_missing_fields={self.grpo_p2_retry_missing_fields}, '
+                    f'p2_max_retries={self.grpo_p2_max_retries}, '
                     f'strict={self.grpo_dedupe_strict}, only_wrong_ids={self.grpo_dedupe_only_wrong_ids}, '
                     f'forced_repairs=0, strict_failures=0, exhausted_violations={total_exhausted_violations}')
             return merged
