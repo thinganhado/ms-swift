@@ -95,14 +95,31 @@ def main():
             prompt1_output = norm(obj.get("prompt1_output")) or norm(meta_row.get("prompt1_output"))
             prompt_ids = parse_prompt_ids(prompt1_output)
 
-            for slot, region_id, explanation in parse_response_regions(response, prompt_ids):
-                out_rows.append({
-                    "sample_id": sample_id,
-                    "region_id": region_id,
-                    "response": f"<Explanation>{explanation}</Explanation>",
-                    "raw_response": response,
-                    "slot": slot,
-                })
+            parsed_rows = parse_response_regions(response, prompt_ids)
+            if not parsed_rows:
+                continue
+
+            explanations = {}
+            region_ids = {}
+            description_lines = []
+            for slot, region_id, explanation in parsed_rows:
+                explanations[f"slot_{slot}"] = explanation
+                region_ids[f"slot_{slot}"] = region_id
+                description_lines.append(
+                    f"Slot {slot} (Region ID {region_id}): <Explanation>{explanation}</Explanation>"
+                )
+
+            out_rows.append({
+                "sample_id": sample_id,
+                # Keep a stable numeric placeholder so the downstream verifier
+                # writer still has a single unique file target per sample.
+                "region_id": 0,
+                "response": "\n".join(description_lines),
+                "raw_response": response,
+                "prompt1_output": prompt1_output,
+                "slot_region_ids": region_ids,
+                "explanations": explanations,
+            })
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:

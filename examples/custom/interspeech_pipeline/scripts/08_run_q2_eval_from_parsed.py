@@ -251,6 +251,7 @@ def main():
                 pred_en_by_sample_slot[(sample_id, slot)] = norm(parsed.get(slot))
 
     verifier_by_key = {}
+    verifier_by_sample_slot = {}
     for p in ver_dir.rglob("*.json"):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
@@ -262,6 +263,36 @@ def main():
         except Exception:
             continue
         structured = d.get("output_structured") or {}
+        slot_payloads = {}
+        if isinstance(structured, dict):
+            for key in ("1", "2", "3"):
+                value = structured.get(key)
+                if isinstance(value, dict):
+                    slot_payloads[int(key)] = value
+            for key in ("slot_1", "slot_2", "slot_3"):
+                value = structured.get(key)
+                if isinstance(value, dict):
+                    try:
+                        slot_payloads[int(key.split("_")[-1])] = value
+                    except Exception:
+                        pass
+            slots_obj = structured.get("slots")
+            if isinstance(slots_obj, dict):
+                for key, value in slots_obj.items():
+                    if isinstance(value, dict):
+                        try:
+                            slot_payloads[int(str(key).split("_")[-1])] = value
+                        except Exception:
+                            pass
+
+        if slot_payloads:
+            for slot, slot_structured in slot_payloads.items():
+                verifier_by_sample_slot[(sample_id, slot)] = {
+                    "time": normalize_time(slot_structured.get("time")),
+                    "frequency": normalize_freq(slot_structured.get("frequency")),
+                    "phonetic": normalize_phon(slot_structured.get("phonetic")),
+                }
+
         verifier_by_key[(sample_id, region_id)] = {
             "time": normalize_time(structured.get("time")),
             "frequency": normalize_freq(structured.get("frequency")),
@@ -280,6 +311,8 @@ def main():
 
     for (sample_id, region_id), gt in gt_by_key.items():
         pred = verifier_by_key.get((sample_id, region_id), {})
+        if not any(v is not None for v in pred.values()):
+            pred = verifier_by_sample_slot.get((sample_id, gt["slot"]), {})
         pt = pred.get("time")
         pf = pred.get("frequency")
         pp = pred.get("phonetic")
