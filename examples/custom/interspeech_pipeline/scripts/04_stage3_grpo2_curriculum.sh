@@ -36,6 +36,7 @@ TOTAL_EPOCHS="${TOTAL_EPOCHS:-5}"
 WARMUP_MAX_STEPS="${WARMUP_MAX_STEPS:-120}"
 TOTAL_MAX_STEPS="${TOTAL_MAX_STEPS:-600}"
 USE_PRED_PHASE="${USE_PRED_PHASE:-1}"
+PRED_ONLY="${PRED_ONLY:-0}"
 
 NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
@@ -55,6 +56,7 @@ echo "[run] BASE_MODEL_ID=${BASE_MODEL_ID}"
 echo "[run] OUTPUT_DIR=${OUTPUT_DIR}"
 echo "[run] RUN_TAG=${RUN_TAG}"
 echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
+echo "[run] PRED_ONLY=${PRED_ONLY}"
 echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
 echo "[run] GRPO2_PRED_PREBUILT=${GRPO2_PRED_PREBUILT}"
 echo "[run] Q2_SFT_INIT_CHECKPOINT=${Q2_SFT_INIT_CHECKPOINT:-<none>}"
@@ -149,6 +151,15 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
     "${PRED_PHASE_RESUME_ARGS[@]}" \
     --num_train_epochs "${WARMUP_EPOCHS}" \
     --max_steps "${WARMUP_MAX_STEPS}"
+fi
+
+if [[ "${PRED_ONLY}" == "1" ]]; then
+  if [[ "${USE_PRED_PHASE}" != "1" ]]; then
+    echo "[error] PRED_ONLY=1 requires USE_PRED_PHASE=1" >&2
+    exit 1
+  fi
+  echo "[run] PRED_ONLY=1; skipping GT phase after pred warmup."
+  exit 0
 fi
 
 if [[ "${USE_PRED_PHASE}" == "1" ]]; then
