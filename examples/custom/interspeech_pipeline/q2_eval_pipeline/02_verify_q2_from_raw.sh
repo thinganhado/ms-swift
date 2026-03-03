@@ -59,40 +59,23 @@ if [ ! -s "${PARSED_JSONL}" ]; then
 fi
 
 cat > "${VERIFIER_SYSTEM_FILE}" <<'EOF'
-Infer the following features for each of the three region descriptions and output:
+Infer the following features from <Explanation> and output:
   - Time: speech or non-speech
   - Frequency: low, mid, or high
   - Phonetic: consonant, vowel, or unvoiced
 If unsure about a field, output "ambiguous" for that field.
 
-You will receive three slot-labeled descriptions in the form:
-  - Slot 1 (Region ID X): <Explanation>...</Explanation>
-  - Slot 2 (Region ID Y): <Explanation>...</Explanation>
-  - Slot 3 (Region ID Z): <Explanation>...</Explanation>
-
 OUTPUT FORMAT (must follow exactly):
 
 {
-  "1": {
-    "time": "speech/non-speech/ambiguous",
-    "frequency": "low/mid/high/ambiguous",
-    "phonetic": "consonant/vowel/unvoiced/ambiguous"
-  },
-  "2": {
-    "time": "speech/non-speech/ambiguous",
-    "frequency": "low/mid/high/ambiguous",
-    "phonetic": "consonant/vowel/unvoiced/ambiguous"
-  },
-  "3": {
-    "time": "speech/non-speech/ambiguous",
-    "frequency": "low/mid/high/ambiguous",
-    "phonetic": "consonant/vowel/unvoiced/ambiguous"
-  }
+  "time": "speech/non-speech/ambiguous",
+  "frequency": "low/mid/high/ambiguous",
+  "phonetic": "consonant/vowel/unvoiced/ambiguous"
 }
 EOF
 
 cat > "${VERIFIER_USER_FILE}" <<'EOF'
-These are artifact descriptions for three spectrogram regions: {description}. Please strictly follow the instructions to extract the information for all three slots.
+This is an artifact description for a spectrogram region: {description}. Please strictly follow the instructions to extract the information.
 EOF
 
 if [ -f "$HOME/.bashrc" ]; then
