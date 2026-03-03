@@ -116,8 +116,6 @@ for row in data:
         "prompt1_output": str(row.get("prompt1_output", "")).strip(),
         "gt_prompt2": gt,
     }
-    if system_prompt:
-        rec["system"] = system_prompt
     if "transcript" in row:
         rec["transcript"] = row["transcript"]
     out.append(rec)
@@ -183,6 +181,7 @@ CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
 swift sft \
   --model "${MODEL_ID}" \
   --dataset "${Q2_JSON_SWIFT}" \
+  --system "${SYSTEM_PROMPT}" \
   --tuner_type lora \
   --torch_dtype "${TORCH_DTYPE}" \
   --lora_rank 32 \
