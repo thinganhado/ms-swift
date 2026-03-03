@@ -108,17 +108,16 @@ for row in data:
     if not gt:
         continue
     user = normalize_user_message(msgs[0] if isinstance(msgs[0], dict) else {"role": "user", "content": []})
-    system = None
-    if system_prompt:
-        system = {"role": "system", "content": system_prompt}
     assistant = {"role": "assistant", "content": [{"type": "text", "text": gt}]}
-    messages = [user, assistant] if system is None else [system, user, assistant]
+    messages = [user, assistant]
     rec = {
         "messages": messages,
         "sample_id": str(row.get("sample_id", "")).strip(),
         "prompt1_output": str(row.get("prompt1_output", "")).strip(),
         "gt_prompt2": gt,
     }
+    if system_prompt:
+        rec["system"] = system_prompt
     if "transcript" in row:
         rec["transcript"] = row["transcript"]
     out.append(rec)
