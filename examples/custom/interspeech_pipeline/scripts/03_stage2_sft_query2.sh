@@ -26,6 +26,7 @@ Do not output any other text outside the three tuples.}"
 SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
 SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-3}"
 CONVERT_ONLY="${CONVERT_ONLY:-0}"
+SKIP_CONVERT="${SKIP_CONVERT:-0}"
 
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q2}"
@@ -66,6 +67,7 @@ if [[ ! -f "${Q2_JSON_IN}" ]]; then
 fi
 
 # ===== Convert Q2-only GT data into a 2-turn SFT dataset =====
+if [[ "${SKIP_CONVERT}" != "1" ]]; then
 python - "${Q2_JSON_IN}" "${Q2_JSON_SWIFT}" "${SYSTEM_PROMPT}" <<'PY'
 import json
 import sys
@@ -125,6 +127,13 @@ dst.parent.mkdir(parents=True, exist_ok=True)
 dst.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 print(f"saved: {dst} (n={len(out)})")
 PY
+else
+  if [[ ! -f "${Q2_JSON_SWIFT}" ]]; then
+    echo "ERROR: SKIP_CONVERT=1 but Q2_JSON_SWIFT not found: ${Q2_JSON_SWIFT}" >&2
+    exit 1
+  fi
+  echo "[done] SKIP_CONVERT=1; using existing dataset: ${Q2_JSON_SWIFT}"
+fi
 
 if [[ "${SFT_DEBUG_DATA}" == "1" ]]; then
   python - "${Q2_JSON_SWIFT}" "${SFT_DEBUG_SAMPLES}" <<'PY'
