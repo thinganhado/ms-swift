@@ -301,7 +301,6 @@ def main():
     gt_caps = []
     pred_caps = []
     sample_slot_correct = {}
-    sample_slot_verified = {}
     field_rows_with_verifier = 0
 
     for (sample_id, region_id), gt in gt_by_key.items():
@@ -313,23 +312,19 @@ def main():
         pp = pred.get("phonetic")
 
         pred_slot = gt["slot"]
-        sample_slot_verified[(sample_id, pred_slot)] = (
-            pt is not None and pf is not None and pp is not None
-        )
+        y_true_t.append(gt["time"])
+        y_pred_t.append(pt)
+        y_true_f.append(gt["frequency"])
+        y_pred_f.append(pf)
+        y_true_p.append(gt["phonetic"])
+        y_pred_p.append(pp)
+
+        pred_en = pred_en_by_sample_slot.get((sample_id, pred_slot), "")
+        gt_caps.append(gt["en"])
+        pred_caps.append(pred_en)
 
         if pt is not None and pf is not None and pp is not None:
             field_rows_with_verifier += 1
-            y_true_t.append(gt["time"])
-            y_pred_t.append(pt)
-            y_true_f.append(gt["frequency"])
-            y_pred_f.append(pf)
-            y_true_p.append(gt["phonetic"])
-            y_pred_p.append(pp)
-
-            pred_en = pred_en_by_sample_slot.get((sample_id, pred_slot), "")
-            gt_caps.append(gt["en"])
-            pred_caps.append(pred_en)
-
             extracted = independent_extract_from_en(pred_en)
             if extracted["T"] is not None:
                 extractable["T"] += 1
@@ -349,7 +344,7 @@ def main():
         )
 
     n_regions_total = len(gt_by_key)
-    n_regions = field_rows_with_verifier
+    n_regions = n_regions_total
     t_metrics = field_metrics(y_true_t, y_pred_t, sorted(TIME_LABELS))
     f_metrics = field_metrics(y_true_f, y_pred_f, sorted(FREQ_LABELS))
     p_metrics = field_metrics(y_true_p, y_pred_p, sorted(PHON_LABELS))
@@ -365,10 +360,7 @@ def main():
     agreement_given_extractable_avg = mean([agreement_t, agreement_f, agreement_p]) if n_regions else 0.0
     consscore = (agree["T"] + agree["F"] + agree["P"]) / (3.0 * n_regions) if n_regions else 0.0
 
-    sample_ids = {
-        sid for sid, _ in gt_by_sample_slot.keys()
-        if all(sample_slot_verified.get((sid, slot), False) for slot in (1, 2, 3))
-    }
+    sample_ids = {sid for sid, _ in gt_by_sample_slot.keys()}
     sample_all9_correct = 0
     for sid in sample_ids:
         if all(sample_slot_correct.get((sid, slot), False) for slot in (1, 2, 3)):
