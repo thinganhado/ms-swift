@@ -6,7 +6,13 @@ from pathlib import Path
 
 
 EN_PAT = re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S)
-REGION_PAT = re.compile(r'(?i)\bRegion ID\s+(\d+)\b')
+# Support freer model outputs such as:
+# - "Region ID [1]: ..."
+# - "Region ID 1: ..."
+# - "Region 1: ..."
+REGION_PAT = re.compile(
+    r'(?i)\bRegion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?(?=\s*[:.\-]|\s)',
+)
 
 
 def norm(value):
