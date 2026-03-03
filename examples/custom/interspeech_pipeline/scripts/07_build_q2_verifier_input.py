@@ -5,25 +5,12 @@ import re
 from pathlib import Path
 
 
-EN_PAT = re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S)
-# Support freer model outputs such as:
-# - "Region ID [1]: ..."
-# - "Region ID 1: ..."
-# - "Region 1: ..."
-# - "#### **Region ID 1**"
-# - "**Region ID [1]**"
-# - "The artifact for region ID 1 is ..."
-REGION_PAT = re.compile(
-    r'''(?ix)
-    (?:
-        \bRegion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?(?=\s*(?:[:.\-]|\*|\n|\r|\s))
-      |
-        \bfor\s+region(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?\s+\bis\b
-      |
-        \bregion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?\s*$
-    )
-    ''',
-)
+SLOT_PATTERNS = {
+    "T": re.compile(r"\bT([123])\s*=\s*([^,;)\n]+)", re.I),
+    "F": re.compile(r"\bF([123])\s*=\s*([^,;)\n]+)", re.I),
+    "P": re.compile(r"\bP([123])\s*=\s*([^,;)\n]+)", re.I),
+    "EnIndexed": re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S),
+}
 
 
 def norm(value):
@@ -45,40 +32,36 @@ def parse_prompt_ids(text):
     return [int(x) for x in re.findall(r"\d+", norm(text))][:3]
 
 
+def parse_indexed_tuple_text(text):
+    text = norm(text)
+    out = {}
+    for name, pattern in SLOT_PATTERNS.items():
+        for idx, val in pattern.findall(text):
+            idx = int(idx)
+            out.setdefault(idx, {})
+            if name == "EnIndexed":
+                out[idx]["En"] = norm(val)
+            else:
+                out[idx][name] = norm(val)
+    return out
+
+
 def parse_response_regions(response, prompt_ids):
-    slot_matches = {int(i): norm(txt) for i, txt in EN_PAT.findall(response)}
+    if len(prompt_ids) < 3:
+        return []
+    parsed = parse_indexed_tuple_text(response)
+    tuple_parts = [norm(part) for part in re.split(r"\)\s*;\s*\(", response)]
     rows = []
-    if slot_matches:
-        for slot in (1, 2, 3):
-            if slot not in slot_matches:
-                continue
-            region_id = prompt_ids[slot - 1] if len(prompt_ids) >= slot else None
-            if region_id is None:
-                continue
-            rows.append((slot, region_id, slot_matches[slot]))
-        if rows:
-            return rows
-
-    matches = list(REGION_PAT.finditer(response))
-    if not matches:
-        return rows
-
-    prompt_id_to_slot = {region_id: idx + 1 for idx, region_id in enumerate(prompt_ids[:3])}
-    for idx, match in enumerate(matches):
-        region_str = next((g for g in match.groups() if g), None)
-        if region_str is None:
-            continue
-        region_id = int(region_str)
-        slot = prompt_id_to_slot.get(region_id)
-        if slot is None:
-            continue
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(response)
-        explanation = norm(response[start:end])
-        if not explanation:
-            explanation = norm(response[match.start():end])
-        if explanation:
-            rows.append((slot, region_id, explanation))
+    for slot in (1, 2, 3):
+        fields = parsed.get(slot, {})
+        if not norm(fields.get("En")) and slot <= len(tuple_parts):
+            m = re.search(r'\bEn\s*=\s*"((?:[^"\\]|\\.)*)"', tuple_parts[slot - 1], re.I | re.S)
+            if m:
+                fields["En"] = norm(m.group(1))
+        # Enforce the exact expected structure: all four indexed fields must be present.
+        if not all(norm(fields.get(name)) for name in ("T", "F", "P", "En")):
+            return []
+        rows.append((slot, prompt_ids[slot - 1], fields["En"]))
     return rows
 
 

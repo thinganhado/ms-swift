@@ -29,9 +29,8 @@ SLOT_PATTERNS = {
     "T": re.compile(r"\bT([123])\s*=\s*([^,;)\n]+)", re.I),
     "F": re.compile(r"\bF([123])\s*=\s*([^,;)\n]+)", re.I),
     "P": re.compile(r"\bP([123])\s*=\s*([^,;)\n]+)", re.I),
-    "En": re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S),
+    "EnIndexed": re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S),
 }
-REGION_PAT = re.compile(r"(?i)\bRegion ID\s+(\d+)\b")
 
 
 def norm(value):
@@ -75,33 +74,28 @@ def parse_indexed_tuple_text(text):
         for idx, val in pattern.findall(text):
             idx = int(idx)
             out.setdefault(idx, {})
-            out[idx][name] = norm(val)
+            if name == "EnIndexed":
+                out[idx]["En"] = norm(val)
+            else:
+                out[idx][name] = norm(val)
     return out
 
 
 def parse_predicted_sections(text, prompt_ids):
     parsed = parse_indexed_tuple_text(text)
-    if any(norm(section.get("En")) for section in parsed.values()):
-        return {slot: norm(section.get("En")) for slot, section in parsed.items()}
-
-    matches = list(REGION_PAT.finditer(text))
-    if not matches:
+    if len(prompt_ids) < 3:
         return {}
-
-    prompt_id_to_slot = {region_id: idx + 1 for idx, region_id in enumerate(prompt_ids[:3])}
+    tuple_parts = [norm(part) for part in re.split(r"\)\s*;\s*\(", text)]
     out = {}
-    for idx, match in enumerate(matches):
-        region_id = int(match.group(1))
-        slot = prompt_id_to_slot.get(region_id)
-        if slot is None:
-            continue
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-        explanation = norm(text[start:end])
-        if not explanation:
-            explanation = norm(text[match.start():end])
-        if explanation:
-            out[slot] = explanation
+    for slot in (1, 2, 3):
+        fields = parsed.get(slot, {})
+        if not norm(fields.get("En")) and slot <= len(tuple_parts):
+            m = re.search(r'\bEn\s*=\s*"((?:[^"\\]|\\.)*)"', tuple_parts[slot - 1], re.I | re.S)
+            if m:
+                fields["En"] = norm(m.group(1))
+        if not all(norm(fields.get(name)) for name in ("T", "F", "P", "En")):
+            return {}
+        out[slot] = norm(fields["En"])
     return out
 
 
