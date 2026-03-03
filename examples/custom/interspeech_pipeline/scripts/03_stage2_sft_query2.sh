@@ -25,6 +25,7 @@ Field definitions:
 Do not output any other text outside the three tuples.}"
 SFT_DEBUG_DATA="${SFT_DEBUG_DATA:-1}"
 SFT_DEBUG_SAMPLES="${SFT_DEBUG_SAMPLES:-3}"
+CONVERT_ONLY="${CONVERT_ONLY:-0}"
 
 CACHE_ROOT="${CACHE_ROOT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q1}"
 TMPDIR_BASE="${TMPDIR_BASE:-/tmp/${USER}_mswift_q2}"
@@ -91,26 +92,10 @@ def text_blocks_from_content(content):
         return out
     return []
 
-def prepend_system_to_user(msg):
+def normalize_user_message(msg):
     content = msg.get("content", [])
     blocks = text_blocks_from_content(content)
-    user_text = " ".join(
-        str(b.get("text", "")).strip()
-        for b in blocks
-        if isinstance(b, dict) and b.get("type") == "text"
-    ).strip()
-    new_text = system_prompt if not user_text else f"{system_prompt}\n\n{user_text}"
-    new_blocks = []
-    inserted = False
-    for b in blocks:
-        if isinstance(b, dict) and b.get("type") == "image":
-            new_blocks.append(b)
-        elif not inserted:
-            new_blocks.append({"type": "text", "text": new_text})
-            inserted = True
-    if not inserted:
-        new_blocks.append({"type": "text", "text": new_text})
-    return {"role": "user", "content": new_blocks}
+    return {"role": "user", "content": blocks}
 
 out = []
 for row in data:
@@ -120,10 +105,14 @@ for row in data:
     gt = str(row.get("gt_prompt2", "")).strip()
     if not gt:
         continue
-    user = prepend_system_to_user(msgs[0] if isinstance(msgs[0], dict) else {"role": "user", "content": []})
+    user = normalize_user_message(msgs[0] if isinstance(msgs[0], dict) else {"role": "user", "content": []})
+    system = None
+    if system_prompt:
+        system = {"role": "system", "content": [{"type": "text", "text": system_prompt}]}
     assistant = {"role": "assistant", "content": [{"type": "text", "text": gt}]}
+    messages = [user, assistant] if system is None else [system, user, assistant]
     rec = {
-        "messages": [user, assistant],
+        "messages": messages,
         "sample_id": str(row.get("sample_id", "")).strip(),
         "prompt1_output": str(row.get("prompt1_output", "")).strip(),
         "gt_prompt2": gt,
@@ -172,6 +161,12 @@ for i, row in enumerate(data[:n_show]):
             txt = txt[:220] + "..."
         print(f"[q2_dbg]   turn={j} role={msg.get('role')} has_image={has_image(msg.get('content'))} text={txt!r}")
 PY
+fi
+
+if [[ "${CONVERT_ONLY}" == "1" ]]; then
+  echo "[done] conversion only; skipping training."
+  echo "[done] q2_json_swift=${Q2_JSON_SWIFT}"
+  exit 0
 fi
 
 # ===== Train Q2-only SFT adapter =====
