@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import random
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -132,6 +133,8 @@ def _build_records_from_img_rows(
     reader: csv.DictReader,
     image_col: str,
     regions_col: str,
+    order_scores: Dict[Tuple[str, str], float],
+    image_suffix: str,
     user_prompt: str,
     json_array_target: bool,
 ) -> Tuple[List[Dict], List[Tuple[str, Dict]], int]:
@@ -142,6 +145,10 @@ def _build_records_from_img_rows(
     for idx, row in enumerate(reader):
         image_path = str(row.get(image_col, "")).strip()
         target_raw = _extract_target(row, regions_col)
+        if image_path and not target_raw:
+            sample_id = _infer_sample_id_from_image_path(image_path, image_suffix, order_scores)
+            if sample_id:
+                target_raw = _target_from_order_scores(order_scores, sample_id)
         if not image_path or not target_raw:
             skipped += 1
             continue
@@ -150,6 +157,63 @@ def _build_records_from_img_rows(
         records.append(rec)
         path_aware_rows.append((image_path, rec))
     return records, path_aware_rows, skipped
+
+
+def _infer_sample_id_from_image_path(
+    image_path: str,
+    image_suffix: str,
+    order_scores: Dict[Tuple[str, str], float],
+) -> Optional[str]:
+    stem = Path(image_path).stem
+    candidates: List[str] = [stem]
+
+    suffix_stem = Path(image_suffix).stem if image_suffix else ""
+    if suffix_stem and stem.endswith(suffix_stem):
+        stripped = stem[: -len(suffix_stem)]
+        if stripped.endswith("_"):
+            stripped = stripped[:-1]
+        if stripped:
+            candidates.append(stripped)
+
+    for candidate in list(candidates):
+        stripped = re.sub(r"_(img(_edge(_number(_axes)?)?)?)$", "", candidate)
+        if stripped and stripped != candidate:
+            candidates.append(stripped)
+
+    for candidate in list(candidates):
+        for method in ("grid", "superpixel", "sam"):
+            token = f"_{method}"
+            pos = candidate.find(token)
+            if pos > 0:
+                prefix = candidate[:pos]
+                if prefix:
+                    candidates.append(prefix)
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if any(sample_id == candidate for sample_id, _ in order_scores.keys()):
+            return candidate
+    return None
+
+
+def _target_from_order_scores(
+    order_scores: Dict[Tuple[str, str], float],
+    sample_id: str,
+) -> Optional[str]:
+    ranked = sorted(
+        [
+            (region_id, score)
+            for (sample_key, region_id), score in order_scores.items()
+            if sample_key == sample_id
+        ],
+        key=lambda x: (-x[1], _region_sort_key(x[0])),
+    )
+    if len(ranked) < 3:
+        return None
+    return ",".join(region_id for region_id, _ in ranked[:3])
 
 
 def _build_records_from_sample_rows(
@@ -276,6 +340,8 @@ def main() -> None:
                 reader=reader,
                 image_col=args.image_col,
                 regions_col=args.regions_col,
+                order_scores=order_scores,
+                image_suffix=args.image_suffix,
                 user_prompt=args.user_prompt,
                 json_array_target=args.json_array_target,
             )
