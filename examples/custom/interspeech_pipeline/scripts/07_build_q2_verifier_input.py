@@ -10,8 +10,19 @@ EN_PAT = re.compile(r'\bEn([123])\s*=\s*"((?:[^"\\]|\\.)*)"', re.I | re.S)
 # - "Region ID [1]: ..."
 # - "Region ID 1: ..."
 # - "Region 1: ..."
+# - "#### **Region ID 1**"
+# - "**Region ID [1]**"
+# - "The artifact for region ID 1 is ..."
 REGION_PAT = re.compile(
-    r'(?i)\bRegion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?(?=\s*[:.\-]|\s)',
+    r'''(?ix)
+    (?:
+        \bRegion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?(?=\s*(?:[:.\-]|\*|\n|\r|\s))
+      |
+        \bfor\s+region(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?\s+\bis\b
+      |
+        \bregion(?:\s+ID)?\s*[\[\(\{]?\s*(\d+)\s*[\]\)\}]?\s*$
+    )
+    ''',
 )
 
 
@@ -54,7 +65,10 @@ def parse_response_regions(response, prompt_ids):
 
     prompt_id_to_slot = {region_id: idx + 1 for idx, region_id in enumerate(prompt_ids[:3])}
     for idx, match in enumerate(matches):
-        region_id = int(match.group(1))
+        region_str = next((g for g in match.groups() if g), None)
+        if region_str is None:
+            continue
+        region_id = int(region_str)
         slot = prompt_id_to_slot.get(region_id)
         if slot is None:
             continue

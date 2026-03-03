@@ -39,6 +39,22 @@ INFER_BACKEND="${INFER_BACKEND:-vllm}"
 MAX_BATCH_SIZE="${MAX_BATCH_SIZE:-8}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1024}"
 TEMPERATURE="${TEMPERATURE:-0}"
+SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
+
+You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
+For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+
+OUTPUT FORMAT (must follow exactly):
+(T1=..., F1=..., P1=..., En1=\"...\"); (T2=..., F2=..., P2=..., En2=\"...\"); (T3=..., F3=..., P3=..., En3=\"...\")
+
+Field definitions:
+- Fields ending in 1, 2, and 3 correspond to ID1, ID2, and ID3 respectively.
+- T: one of {speech, non-speech}
+- F: one of {low, mid, high}
+- P: one of {consonant, vowel, unvoiced}
+- En: textual description, must be enclosed in double quotes.
+
+Do not output any other text outside the three tuples.}"
 QWEN3_DIR="${QWEN3_DIR:-/scratch3/che489/Ha/interspeech/LLM/Qwen3}"
 VERIFIER_MODEL_ID="${VERIFIER_MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/LLM/Qwen3-30B-A3B-Instruct-2507/}"
 VERIFIER_GT_CSV="${VERIFIER_GT_CSV:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final__En/union_all3_only.csv}"
@@ -120,6 +136,7 @@ echo "[run] CACHE_ROOT=${CACHE_ROOT}"
 echo "[run] SHARD_ID=${SHARD_ID}"
 echo "[run] SHARD_COUNT=${SHARD_COUNT}"
 echo "[run] FINALIZE_SHARDS=${FINALIZE_SHARDS}"
+echo "[run] SYSTEM_PROMPT=enforced"
 if [ "${INFER_BACKEND}" = "vllm" ]; then
   echo "[run] VLLM_TP=${VLLM_TP}"
   echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
@@ -134,6 +151,7 @@ cd "$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SWIFT_INFER_ARGS=(
   --model "${MODEL_ID}"
   --infer_backend "${INFER_BACKEND}"
+  --system "${SYSTEM_PROMPT}"
   --val_dataset "${INFER_META_JSON}"
   --max_new_tokens "${MAX_NEW_TOKENS}"
   --temperature "${TEMPERATURE}"

@@ -39,6 +39,22 @@ MODEL_ID="${MODEL_ID:-deepseek-ai/deepseek-vl2}"
 META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val.json}"
 OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-eval/}"
 RUN_TAG="${RUN_TAG:-deepseek_q2_eval_$(date +%Y%m%d_%H%M%S)}"
+SYSTEM_PROMPT="${SYSTEM_PROMPT:-You are an expert in deepfake speech spectrogram forensics.
+
+You are given a spectrogram and transcript. You have already selected exactly 3 region IDs, in order: ID1, ID2, ID3.
+For each ID, infer timing information (T), frequency band (F), phonetic category (P), and a visual description of the artifact and the likely audio impact implied by the artificial signs (En).
+
+OUTPUT FORMAT (must follow exactly):
+(T1=..., F1=..., P1=..., En1=\"...\"); (T2=..., F2=..., P2=..., En2=\"...\"); (T3=..., F3=..., P3=..., En3=\"...\")
+
+Field definitions:
+- Fields ending in 1, 2, and 3 correspond to ID1, ID2, and ID3 respectively.
+- T: one of {speech, non-speech}
+- F: one of {low, mid, high}
+- P: one of {consonant, vowel, unvoiced}
+- En: textual description, must be enclosed in double quotes.
+
+Do not output any other text outside the three tuples.}"
 SHARD_COUNT="${SHARD_COUNT:-4}"
 OVERWRITE="${OVERWRITE:-1}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
@@ -82,6 +98,7 @@ echo "[run] GPU_IDS=${GPU_IDS}"
 echo "[run] MAX_CONCURRENT_SHARDS=${MAX_CONCURRENT_SHARDS}"
 echo "[run] FINALIZE_SHARDS=${FINALIZE_SHARDS}"
 echo "[run] CACHE_ROOT=${CACHE_ROOT}"
+echo "[run] SYSTEM_PROMPT=enforced"
 
 cat > "${TMP_PY}" <<'PY'
 #!/usr/bin/env python3
@@ -277,14 +294,14 @@ def _load_images(conversation):
     return pil_images
 
 
-def _run_one(model, processor, conversation, max_new_tokens, temperature, top_p, repetition_penalty, chunk_size, dtype):
+def _run_one(model, processor, conversation, system_prompt, max_new_tokens, temperature, top_p, repetition_penalty, chunk_size, dtype):
     tokenizer = processor.tokenizer
     pil_images = _load_images(conversation)
     prepare_inputs = processor(
         conversations=conversation,
         images=pil_images,
         force_batchify=True,
-        system_prompt="",
+        system_prompt=system_prompt,
     ).to(model.device, dtype=dtype)
 
     with torch.no_grad():
@@ -347,6 +364,7 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=-1)
     parser.add_argument("--torch-dtype", default="float16")
     parser.add_argument("--deepseek-dir", default="")
+    parser.add_argument("--system-prompt", default="")
     args = parser.parse_args()
 
     dtype = _dtype_from_name(args.torch_dtype)
@@ -386,6 +404,7 @@ def main():
                 model,
                 processor,
                 conversation,
+                args.system_prompt,
                 args.max_new_tokens,
                 args.temperature,
                 args.top_p,
@@ -460,7 +479,8 @@ elif [ "${SHARD_COUNT}" -gt 1 ]; then
           --repetition-penalty "${REPETITION_PENALTY}" \
           --chunk-size "${CHUNK_SIZE}" \
           --torch-dtype "${TORCH_DTYPE}" \
-          --deepseek-dir "${DEEPSEEK_VL2_DIR}"
+          --deepseek-dir "${DEEPSEEK_VL2_DIR}" \
+          --system-prompt "${SYSTEM_PROMPT}"
     ) &
     pids+=("$!")
     active_jobs=$((active_jobs + 1))
@@ -497,7 +517,8 @@ else
       --repetition-penalty "${REPETITION_PENALTY}" \
       --chunk-size "${CHUNK_SIZE}" \
       --torch-dtype "${TORCH_DTYPE}" \
-      --deepseek-dir "${DEEPSEEK_VL2_DIR}"
+      --deepseek-dir "${DEEPSEEK_VL2_DIR}" \
+      --system-prompt "${SYSTEM_PROMPT}"
 fi
 
 cat > "${VERIFIER_SYSTEM_FILE}" <<'EOF'
