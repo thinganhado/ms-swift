@@ -312,19 +312,18 @@ def main():
         pp = pred.get("phonetic")
 
         pred_slot = gt["slot"]
-        y_true_t.append(gt["time"])
-        y_pred_t.append(pt)
-        y_true_f.append(gt["frequency"])
-        y_pred_f.append(pf)
-        y_true_p.append(gt["phonetic"])
-        y_pred_p.append(pp)
-
         pred_en = pred_en_by_sample_slot.get((sample_id, pred_slot), "")
-        gt_caps.append(gt["en"])
-        pred_caps.append(pred_en)
 
         if pt is not None and pf is not None and pp is not None:
             field_rows_with_verifier += 1
+            y_true_t.append(gt["time"])
+            y_pred_t.append(pt)
+            y_true_f.append(gt["frequency"])
+            y_pred_f.append(pf)
+            y_true_p.append(gt["phonetic"])
+            y_pred_p.append(pp)
+            gt_caps.append(gt["en"])
+            pred_caps.append(pred_en)
             extracted = independent_extract_from_en(pred_en)
             if extracted["T"] is not None:
                 extractable["T"] += 1
@@ -344,7 +343,7 @@ def main():
         )
 
     n_regions_total = len(gt_by_key)
-    n_regions = n_regions_total
+    n_regions = field_rows_with_verifier
     t_metrics = field_metrics(y_true_t, y_pred_t, sorted(TIME_LABELS))
     f_metrics = field_metrics(y_true_f, y_pred_f, sorted(FREQ_LABELS))
     p_metrics = field_metrics(y_true_p, y_pred_p, sorted(PHON_LABELS))
@@ -361,8 +360,15 @@ def main():
     consscore = (agree["T"] + agree["F"] + agree["P"]) / (3.0 * n_regions) if n_regions else 0.0
 
     sample_ids = {sid for sid, _ in gt_by_sample_slot.keys()}
+    verified_sample_ids = set()
+    for (sample_id, _region_id), pred in verifier_by_key.items():
+        if pred.get("time") is not None and pred.get("frequency") is not None and pred.get("phonetic") is not None:
+            verified_sample_ids.add(sample_id)
+    for (sample_id, _slot), pred in verifier_by_sample_slot.items():
+        if pred.get("time") is not None and pred.get("frequency") is not None and pred.get("phonetic") is not None:
+            verified_sample_ids.add(sample_id)
     sample_all9_correct = 0
-    for sid in sample_ids:
+    for sid in verified_sample_ids:
         if all(sample_slot_correct.get((sid, slot), False) for slot in (1, 2, 3)):
             sample_all9_correct += 1
 
@@ -373,6 +379,7 @@ def main():
         "num_regions_scored": n_regions,
         "field_rows_with_verifier": field_rows_with_verifier,
         "field_coverage_rate": (field_rows_with_verifier / n_regions_total) if n_regions_total else 0.0,
+        "field_coverage_percent": (100.0 * field_rows_with_verifier / n_regions_total) if n_regions_total else 0.0,
         "accuracy": {
             "Accuracy_T": t_metrics["accuracy"],
             "Accuracy_F": f_metrics["accuracy"],
@@ -382,7 +389,7 @@ def main():
             "MacroF1_P": p_metrics["macro_f1"],
             "MeanFieldAcc_macro_3fields": mean_fieldacc_macro_3,
             "MeanFieldAcc_macro": mean_fieldacc_macro_3,
-            "sample_all9_accuracy": (sample_all9_correct / len(sample_ids)) if sample_ids else 0.0,
+            "sample_all9_accuracy": (sample_all9_correct / len(verified_sample_ids)) if verified_sample_ids else 0.0,
         },
         "consistency": {
             "ConsScore": consscore,
