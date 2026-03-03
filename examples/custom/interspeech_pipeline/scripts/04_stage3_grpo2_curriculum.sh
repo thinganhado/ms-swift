@@ -5,10 +5,11 @@ set -euo pipefail
 # Base model should be the GRPO1-merged (or multiturn-SFT-merged) checkpoint.
 # GRPO2 trains a NEW LoRA adapter on top of this fixed base model.
 BASE_MODEL_ID="${BASE_MODEL_ID:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-1-ms-swift/lr1e-5_r8_a32_lora_merged}"
-GRPO2_GT_JSON_IN="${GRPO2_GT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt.json}"
+GRPO2_GT_JSON_IN="${GRPO2_GT_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_train_sft_q2_swift.json}"
 GRPO2_PRED_JSON_IN="${GRPO2_PRED_JSON_IN:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred.json}"
-GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_gt_swift_grpo2.json}"
+GRPO2_GT_JSON_SWIFT="${GRPO2_GT_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_train_sft_q2_swift.json}"
 GRPO2_PRED_JSON_SWIFT="${GRPO2_PRED_JSON_SWIFT:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2/grpo2_pred_swift_grpo2.json}"
+GRPO2_GT_PREBUILT="${GRPO2_GT_PREBUILT:-1}"
 GRPO2_PRED_PREBUILT="${GRPO2_PRED_PREBUILT:-1}"
 Q2_SFT_INIT_CHECKPOINT="${Q2_SFT_INIT_CHECKPOINT:-}"
 OUTPUT_DIR_BASE="${OUTPUT_DIR_BASE:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/GRPO-2-ms-swift/grpo2_curr_fullReward_lora}"
@@ -80,6 +81,7 @@ echo "[run] RUN_TAG=${RUN_TAG}"
 echo "[run] USE_PRED_PHASE=${USE_PRED_PHASE}"
 echo "[run] PRED_ONLY=${PRED_ONLY}"
 echo "[run] VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION}"
+echo "[run] GRPO2_GT_PREBUILT=${GRPO2_GT_PREBUILT}"
 echo "[run] GRPO2_PRED_PREBUILT=${GRPO2_PRED_PREBUILT}"
 echo "[run] Q2_SFT_INIT_CHECKPOINT=${Q2_SFT_INIT_CHECKPOINT:-<none>}"
 
@@ -148,9 +150,16 @@ if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   fi
 fi
 
-python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
-  --input-json "${GRPO2_GT_JSON_IN}" \
-  --output-json "${GRPO2_GT_JSON_SWIFT}"
+if [[ "${GRPO2_GT_PREBUILT}" == "1" ]]; then
+  mkdir -p "$(dirname "${GRPO2_GT_JSON_SWIFT}")"
+  if [[ "${GRPO2_GT_JSON_IN}" != "${GRPO2_GT_JSON_SWIFT}" ]]; then
+    cp -f "${GRPO2_GT_JSON_IN}" "${GRPO2_GT_JSON_SWIFT}"
+  fi
+else
+  python examples/custom/interspeech_pipeline/tools/build_swift_grpo_prompt2_dataset.py \
+    --input-json "${GRPO2_GT_JSON_IN}" \
+    --output-json "${GRPO2_GT_JSON_SWIFT}"
+fi
 
 if [[ "${USE_PRED_PHASE}" == "1" ]]; then
   PRED_PHASE_RESUME_ARGS=()

@@ -108,7 +108,7 @@ for row in data:
     user = normalize_user_message(msgs[0] if isinstance(msgs[0], dict) else {"role": "user", "content": []})
     system = None
     if system_prompt:
-        system = {"role": "system", "content": [{"type": "text", "text": system_prompt}]}
+        system = {"role": "system", "content": system_prompt}
     assistant = {"role": "assistant", "content": [{"type": "text", "text": gt}]}
     messages = [user, assistant] if system is None else [system, user, assistant]
     rec = {

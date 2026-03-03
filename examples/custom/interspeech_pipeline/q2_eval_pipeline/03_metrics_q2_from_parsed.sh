@@ -5,18 +5,13 @@ PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${PIPELINE_DIR}/scripts"
 
 RUN_DIR="${RUN_DIR:-}"
-META_JSON="${META_JSON:-}"
+META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val_sft_q2_swift.json}"
 RAW_RESULT_JSONL="${RAW_RESULT_JSONL:-}"
 VERIFIER_OUTPUT_DIR="${VERIFIER_OUTPUT_DIR:-}"
 EVAL_JSON="${EVAL_JSON:-}"
 
 if [ -z "${RUN_DIR}" ]; then
   echo "[error] RUN_DIR is required." >&2
-  exit 1
-fi
-
-if [ -z "${META_JSON}" ]; then
-  echo "[error] META_JSON is required." >&2
   exit 1
 fi
 
