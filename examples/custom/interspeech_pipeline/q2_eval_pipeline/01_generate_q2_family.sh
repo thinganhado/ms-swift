@@ -5,6 +5,7 @@ PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="${PIPELINE_DIR}/scripts"
 
 FAMILY="${FAMILY:-}"
+META_JSON="${META_JSON:-/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val_sft_q2_swift.json}"
 PRINT_OUTPUTS="${PRINT_OUTPUTS:-0}"
 PRINT_OUTPUT_LIMIT="${PRINT_OUTPUT_LIMIT:-10}"
 PRINT_OUTPUT_CHARS="${PRINT_OUTPUT_CHARS:-1200}"
@@ -46,9 +47,10 @@ echo "[run] FAMILY=${FAMILY}"
 echo "[run] TARGET_SCRIPT=${TARGET_SCRIPT}"
 echo "[run] FINALIZE_SHARDS=${FINALIZE_SHARDS}"
 echo "[run] This generation stage only writes infer_result.jsonl outputs."
+echo "[run] META_JSON=${META_JSON}"
 echo "[run] PRINT_OUTPUTS=${PRINT_OUTPUTS}"
 
-bash "${TARGET_SCRIPT}" "$@"
+META_JSON="${META_JSON}" bash "${TARGET_SCRIPT}" "$@"
 
 if [ "${PRINT_OUTPUTS}" = "1" ]; then
   MODEL_ID="${MODEL_ID:-}"
