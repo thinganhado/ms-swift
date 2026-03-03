@@ -49,9 +49,9 @@ OUTPUT FORMAT (must follow exactly):
 
 Field definitions:
 - Fields ending in 1, 2, and 3 correspond to ID1, ID2, and ID3 respectively.
-- T: one of {speech, non-speech}
-- F: one of {low, mid, high}
-- P: one of {consonant, vowel, unvoiced}
+- T: one of {speech, non-speech\}
+- F: one of {low, mid, high\}
+- P: one of {consonant, vowel, unvoiced\}
 - En: textual description, must be enclosed in double quotes.
 
 Do not output any other text outside the three tuples.}"
