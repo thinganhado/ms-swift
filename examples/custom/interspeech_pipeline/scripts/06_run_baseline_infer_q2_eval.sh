@@ -146,7 +146,7 @@ fi
 
 conda activate vllm
 
-cd "$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+cd "$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 SWIFT_INFER_ARGS=(
   --model "${MODEL_ID}"
