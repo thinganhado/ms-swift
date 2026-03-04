@@ -86,6 +86,32 @@ def canonical_sample_id(payload, fallback_sample_id: str):
     return fallback_sample_id
 
 
+def build_payload_index(root: Path):
+    index = {}
+    if not root.exists():
+        return index
+
+    candidate_files = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name in {"json", "json.json"} or path.suffix.lower() == ".json":
+            candidate_files.append(path)
+
+    for path in sorted(candidate_files):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        sample_id = canonical_sample_id(payload, "")
+        if not sample_id:
+            continue
+        index.setdefault(sample_id, payload)
+    return index
+
+
 def parse_predicted_ids(response: str):
     ids = []
     for pattern in REGION_PATTERNS:
@@ -166,6 +192,7 @@ def main():
     gt_rows = json.loads(gt_meta_path.read_text(encoding="utf-8"))
     if not isinstance(gt_rows, list):
         raise ValueError(f"Expected a JSON array in {gt_meta_path}")
+    payload_index = build_payload_index(q1_root)
 
     out_rows = []
     skipped = 0
@@ -173,7 +200,9 @@ def main():
         if not isinstance(row, dict):
             continue
         sample_id = norm(row.get("sample_id"))
-        payload = find_q1_payload(q1_root, sample_id)
+        payload = payload_index.get(sample_id)
+        if payload is None:
+            payload = find_q1_payload(q1_root, sample_id)
         out_sample_id = canonical_sample_id(payload, sample_id)
         pred_ids = parse_predicted_ids(norm(payload.get("response"))) if isinstance(payload, dict) else []
         if len(pred_ids) < 3:
