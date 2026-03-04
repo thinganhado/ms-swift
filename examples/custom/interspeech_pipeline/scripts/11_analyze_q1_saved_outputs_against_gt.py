@@ -37,6 +37,12 @@ def parse_args():
     )
     parser.add_argument("--top-k", type=int, default=10, help="How many top confusion pairs to report.")
     parser.add_argument("--output-json", help="Optional output JSON path for extracted predictions or analysis summary.")
+    parser.add_argument(
+        "--debug-limit",
+        type=int,
+        default=20,
+        help="How many skipped examples to include in extract-mode debug output.",
+    )
     return parser.parse_args()
 
 
@@ -124,15 +130,42 @@ def iter_payloads(root: Path):
         yield path, payload
 
 
-def extract_rows(q1_root: Path):
+def extract_rows(q1_root: Path, debug_limit: int = 20):
     rows = []
     skipped = 0
+    skip_reasons = Counter()
+    skipped_examples = []
     for path, payload in iter_payloads(q1_root):
         sample_id = norm(payload.get("sample_id"))
         response = norm(payload.get("response"))
+        if not response:
+            skipped += 1
+            skip_reasons["empty_response"] += 1
+            if len(skipped_examples) < debug_limit:
+                skipped_examples.append(
+                    {
+                        "reason": "empty_response",
+                        "sample_id": sample_id,
+                        "source_file": path.as_posix(),
+                        "raw_response": response,
+                    }
+                )
+            continue
         pred_ids = normalize_predicted_ids(parse_predicted_ids(response))
         if len(pred_ids) < 3:
             skipped += 1
+            skip_reasons["parsed_fewer_than_3_valid_ids"] += 1
+            if len(skipped_examples) < debug_limit:
+                skipped_examples.append(
+                    {
+                        "reason": "parsed_fewer_than_3_valid_ids",
+                        "sample_id": sample_id,
+                        "source_file": path.as_posix(),
+                        "raw_response": response[:500],
+                        "parsed_ids_before_filter": parse_predicted_ids(response),
+                        "parsed_ids_after_filter": pred_ids,
+                    }
+                )
             continue
         rows.append(
             {
@@ -143,7 +176,7 @@ def extract_rows(q1_root: Path):
                 "prompt1_output": f"[{', '.join(map(str, pred_ids))}]",
             }
         )
-    return rows, skipped
+    return rows, skipped, skip_reasons, skipped_examples
 
 
 def extract_gt_ids(row):
@@ -330,13 +363,14 @@ def main():
         if not args.q1_output_root:
             raise ValueError("--q1-output-root is required in extract mode.")
         q1_root = Path(args.q1_output_root).expanduser().resolve()
-        rows, skipped = extract_rows(q1_root)
+        rows, skipped, skip_reasons, skipped_examples = extract_rows(q1_root, debug_limit=args.debug_limit)
         result = {
             "num_rows": len(rows),
             "skipped_rows": skipped,
-            "rows": rows,
+            "skip_reasons": dict(skip_reasons),
+            "skipped_examples": skipped_examples,
         }
-        print(json.dumps({"num_rows": len(rows), "skipped_rows": skipped}, ensure_ascii=False, indent=2))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         out_path = Path(args.output_json or args.pred_json).expanduser().resolve() if (args.output_json or args.pred_json) else None
         if out_path:
             out_path.parent.mkdir(parents=True, exist_ok=True)
