@@ -8,6 +8,7 @@ from pathlib import Path
 REGION_PATTERNS = [
     re.compile(r"\bRegion(?:\s+ID)?\s*\[?(\d+)\]?\b", re.I),
     re.compile(r"\bregions?\s*[:\-]?\s*\[([0-9,\s]+)\]", re.I),
+    re.compile(r"^\s*\[([0-9,\s]+)\]\s*$"),
 ]
 
 USER_IDS_PATTERN = re.compile(
@@ -70,6 +71,19 @@ def find_q1_payload(root: Path, sample_id: str):
             except Exception:
                 continue
     return None
+
+
+def canonical_sample_id(payload, fallback_sample_id: str):
+    if isinstance(payload, dict):
+        img_path = norm(payload.get("img_path"))
+        if img_path:
+            stem = Path(img_path).stem
+            suffix = "_grid_img_edge_number_axes"
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+            if stem:
+                return stem
+    return fallback_sample_id
 
 
 def parse_predicted_ids(response: str):
@@ -160,6 +174,7 @@ def main():
             continue
         sample_id = norm(row.get("sample_id"))
         payload = find_q1_payload(q1_root, sample_id)
+        out_sample_id = canonical_sample_id(payload, sample_id)
         pred_ids = parse_predicted_ids(norm(payload.get("response"))) if isinstance(payload, dict) else []
         if len(pred_ids) < 3:
             pred_ids = normalize_predicted_ids(pred_ids)
@@ -173,7 +188,7 @@ def main():
         user_msg = msgs[0] if msgs and isinstance(msgs[0], dict) else {"role": "user", "content": []}
         out_row = {
             "messages": [clone_user_message_with_new_ids(user_msg, prompt1_output)],
-            "sample_id": sample_id,
+            "sample_id": out_sample_id,
             "prompt1_output": prompt1_output,
             "gt_prompt2": norm(row.get("gt_prompt2")),
         }
