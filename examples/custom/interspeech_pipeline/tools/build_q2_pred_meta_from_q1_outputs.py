@@ -15,7 +15,6 @@ USER_IDS_PATTERN = re.compile(
     r"(selected region IDs in )\[[^\]]*\]",
     re.I,
 )
-IMPOSSIBLE_IDS = [17, 18, 19]
 
 
 def norm(value):
@@ -40,11 +39,6 @@ def parse_args():
         "--output-json",
         required=True,
         help="Path to write the prediction-aware Q2 metadata JSON.",
-    )
-    parser.add_argument(
-        "--allow-missing",
-        action="store_true",
-        help="If set, keep rows even when a Q1 prediction file is missing or unparsable.",
     )
     return parser.parse_args()
 
@@ -147,17 +141,12 @@ def normalize_predicted_ids(pred_ids):
             continue
         if rid in seen:
             continue
+        if not (1 <= rid <= 16):
+            continue
         seen.add(rid)
         cleaned.append(rid)
         if len(cleaned) == 3:
             return cleaned
-
-    for rid in IMPOSSIBLE_IDS:
-        if rid in seen:
-            continue
-        cleaned.append(rid)
-        if len(cleaned) == 3:
-            break
     return cleaned
 
 
@@ -205,12 +194,10 @@ def main():
             payload = find_q1_payload(q1_root, sample_id)
         out_sample_id = canonical_sample_id(payload, sample_id)
         pred_ids = parse_predicted_ids(norm(payload.get("response"))) if isinstance(payload, dict) else []
+        pred_ids = normalize_predicted_ids(pred_ids)
         if len(pred_ids) < 3:
-            pred_ids = normalize_predicted_ids(pred_ids)
-            if not isinstance(payload, dict):
-                skipped += 1
-        else:
-            pred_ids = normalize_predicted_ids(pred_ids)
+            skipped += 1
+            continue
 
         prompt1_output = f"[{', '.join(map(str, pred_ids))}]"
         msgs = row.get("messages") or []
