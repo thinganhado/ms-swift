@@ -303,29 +303,28 @@ def main():
         has_verifier = pt is not None and pf is not None and pp is not None
         pred_en = pred_en_by_key.get((sample_id, region_id), "")
 
-        if has_verifier:
-            field_rows_with_verifier += 1
-            consistency_rows += 1
-            extracted = independent_extract_from_en(pred_en)
-            if extracted["T"] is not None:
-                extractable["T"] += 1
-                if extracted["T"] == pt:
-                    agree["T"] += 1
-            if extracted["F"] is not None:
-                extractable["F"] += 1
-                if extracted["F"] == pf:
-                    agree["F"] += 1
-            if extracted["P"] is not None:
-                extractable["P"] += 1
-                if extracted["P"] == pp:
-                    agree["P"] += 1
-
         if gt is None:
             continue
 
         overlap_rows_total += 1
         if not has_verifier:
             continue
+
+        field_rows_with_verifier += 1
+        consistency_rows += 1
+        extracted = independent_extract_from_en(pred_en)
+        if extracted["T"] is not None:
+            extractable["T"] += 1
+            if extracted["T"] == pt:
+                agree["T"] += 1
+        if extracted["F"] is not None:
+            extractable["F"] += 1
+            if extracted["F"] == pf:
+                agree["F"] += 1
+        if extracted["P"] is not None:
+            extractable["P"] += 1
+            if extracted["P"] == pp:
+                agree["P"] += 1
 
         overlap_rows_with_verifier += 1
         y_true_t.append(gt["time"])
@@ -347,6 +346,7 @@ def main():
     f_metrics = field_metrics(y_true_f, y_pred_f, sorted(FREQ_LABELS))
     p_metrics = field_metrics(y_true_p, y_pred_p, sorted(PHON_LABELS))
     mean_fieldacc_macro_3 = mean([t_metrics["accuracy"], f_metrics["accuracy"], p_metrics["accuracy"]]) if n_regions else 0.0
+    end_to_end_factor = (overlap_rows_with_verifier / n_regions_total) if n_regions_total else 0.0
 
     coverage_t = (extractable["T"] / consistency_rows) if consistency_rows else 0.0
     coverage_f = (extractable["F"] / consistency_rows) if consistency_rows else 0.0
@@ -358,7 +358,7 @@ def main():
     agreement_given_extractable_avg = mean([agreement_t, agreement_f, agreement_p]) if consistency_rows else 0.0
     consscore = (agree["T"] + agree["F"] + agree["P"]) / (3.0 * consistency_rows) if consistency_rows else 0.0
 
-    eligible_samples = 0
+    eligible_samples = len(gt_ids_by_sample)
     sample_all9_correct = 0.0
     for sample_id, gt_region_ids in gt_ids_by_sample.items():
         pred_verified_overlap = overlap_verified_ids_by_sample.get(sample_id, set())
@@ -381,17 +381,17 @@ def main():
         "field_coverage_percent": (100.0 * field_rows_with_verifier / n_regions_total) if n_regions_total else 0.0,
         "overlap_rate": (overlap_rows_total / n_regions_total) if n_regions_total else 0.0,
         "overlap_percent": (100.0 * overlap_rows_total / n_regions_total) if n_regions_total else 0.0,
-        "overlap_verified_rate": (n_regions / overlap_rows_total) if overlap_rows_total else 0.0,
-        "overlap_verified_percent": (100.0 * n_regions / overlap_rows_total) if overlap_rows_total else 0.0,
+        "overlap_verified_rate": (overlap_rows_with_verifier / overlap_rows_total) if overlap_rows_total else 0.0,
+        "overlap_verified_percent": (100.0 * overlap_rows_with_verifier / overlap_rows_total) if overlap_rows_total else 0.0,
         "accuracy": {
-            "Accuracy_T": t_metrics["accuracy"],
-            "Accuracy_F": f_metrics["accuracy"],
-            "Accuracy_P": p_metrics["accuracy"],
-            "MacroF1_T": t_metrics["macro_f1"],
-            "MacroF1_F": f_metrics["macro_f1"],
-            "MacroF1_P": p_metrics["macro_f1"],
-            "MeanFieldAcc_macro_3fields": mean_fieldacc_macro_3,
-            "MeanFieldAcc_macro": mean_fieldacc_macro_3,
+            "Accuracy_T": t_metrics["accuracy"] * end_to_end_factor,
+            "Accuracy_F": f_metrics["accuracy"] * end_to_end_factor,
+            "Accuracy_P": p_metrics["accuracy"] * end_to_end_factor,
+            "MacroF1_T": t_metrics["macro_f1"] * end_to_end_factor,
+            "MacroF1_F": f_metrics["macro_f1"] * end_to_end_factor,
+            "MacroF1_P": p_metrics["macro_f1"] * end_to_end_factor,
+            "MeanFieldAcc_macro_3fields": mean_fieldacc_macro_3 * end_to_end_factor,
+            "MeanFieldAcc_macro": mean_fieldacc_macro_3 * end_to_end_factor,
             "sample_all9_accuracy": (sample_all9_correct / eligible_samples) if eligible_samples else 0.0,
             "sample_all9_eligible_count": eligible_samples,
         },
@@ -407,7 +407,11 @@ def main():
             "AgreementGivenExtractable_P": agreement_p,
             "AgreementGivenExtractableAvg": agreement_given_extractable_avg,
         },
-        "caption_quality_en": caption,
+        "caption_quality_en": {
+            "ROUGE_L": (caption["ROUGE_L"] * end_to_end_factor) if caption["ROUGE_L"] is not None else None,
+            "METEOR": (caption["METEOR"] * end_to_end_factor) if caption["METEOR"] is not None else None,
+            "BERTScore_F1": (caption["BERTScore_F1"] * end_to_end_factor) if caption["BERTScore_F1"] is not None else None,
+        },
     }
 
     out_json.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
