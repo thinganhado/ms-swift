@@ -14,6 +14,7 @@ USER_IDS_PATTERN = re.compile(
     r"(selected region IDs in )\[[^\]]*\]",
     re.I,
 )
+IMPOSSIBLE_IDS = [17, 18, 19]
 
 
 def norm(value):
@@ -96,6 +97,30 @@ def parse_predicted_ids(response: str):
     return deduped[:3]
 
 
+def normalize_predicted_ids(pred_ids):
+    cleaned = []
+    seen = set()
+    for rid in pred_ids:
+        try:
+            rid = int(rid)
+        except Exception:
+            continue
+        if rid in seen:
+            continue
+        seen.add(rid)
+        cleaned.append(rid)
+        if len(cleaned) == 3:
+            return cleaned
+
+    for rid in IMPOSSIBLE_IDS:
+        if rid in seen:
+            continue
+        cleaned.append(rid)
+        if len(cleaned) == 3:
+            break
+    return cleaned
+
+
 def clone_user_message_with_new_ids(msg, prompt1_output: str):
     if not isinstance(msg, dict):
         return {"role": "user", "content": []}
@@ -137,13 +162,11 @@ def main():
         payload = find_q1_payload(q1_root, sample_id)
         pred_ids = parse_predicted_ids(norm(payload.get("response"))) if isinstance(payload, dict) else []
         if len(pred_ids) < 3:
-            if not args.allow_missing:
+            pred_ids = normalize_predicted_ids(pred_ids)
+            if not isinstance(payload, dict):
                 skipped += 1
-                continue
-            pred_ids = [int(x) for x in re.findall(r"\d+", norm(row.get("prompt1_output")))[:3]]
-        if len(pred_ids) < 3:
-            skipped += 1
-            continue
+        else:
+            pred_ids = normalize_predicted_ids(pred_ids)
 
         prompt1_output = f"[{', '.join(map(str, pred_ids))}]"
         msgs = row.get("messages") or []
