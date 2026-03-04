@@ -76,6 +76,18 @@ def parse_predicted_ids(response: str):
             continue
         seen.add(rid)
         deduped.append(rid)
+    if len(deduped) < 3:
+        for rid in re.findall(r"\d+", response or ""):
+            try:
+                rid = int(rid)
+            except Exception:
+                continue
+            if rid in seen:
+                continue
+            seen.add(rid)
+            deduped.append(rid)
+            if len(deduped) == 3:
+                break
     return deduped[:3]
 
 
