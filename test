@@ -1,0 +1,101 @@
+# Q2 GRPO schedule ablation commands
+# Run from repo root: C:\Users\donga\OneDrive\Documents\GitHub\ms-swift
+# Metrics used from q2_eval_metrics.json:
+#   accuracy.MeanFieldAcc_macro
+#   consistency.CoverageAvg
+#   caption_quality_en.BERTScore_F1
+
+# ============================================================
+# 0) Shared paths
+# ============================================================
+
+export Q2_TRAIN_JSON="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_train_sft_q2_swift.json"
+export Q2_VAL_JSON="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val.json"
+export SFT2_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q2/stage2_q2_lora_from_base_gt_train/v6-20260303-192053/checkpoint-486-merged"
+export GRPO2_PRED_ONLY_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-2_Q2_pred_only/v1-20260303-111455/v0-20260303-111538/checkpoint-1400-merged"
+export GRPO2_PRED_GT_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-2_Q2_gt_from_predmerged/v6-20260303-213206/v0-20260303-213248/checkpoint-4900-merged"
+
+# This should match the exact GRPO-1-merged base used for your Q2 GRPO runs.
+# Verify this path against your existing Pred-only / Pred->GT run logs before using it.
+export Q2_BASE_MODEL="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/base_q1_merged/"
+
+
+# ============================================================
+# 1) GT-only: train a GT-only GRPO2 checkpoint
+# ============================================================
+# This row does not exist yet in your provided checkpoints.
+# It starts from SFT2, skips the prediction warmup phase, trains on the Q2 train split,
+# and should later be evaluated on the Q2 val split.
+
+RUN_TAG=gt_only_train \
+BASE_MODEL_ID="${Q2_BASE_MODEL}" \
+Q2_SFT_INIT_CHECKPOINT="${SFT2_CKPT}" \
+GRPO2_GT_JSON_IN="${Q2_TRAIN_JSON}" \
+GRPO2_GT_JSON_SWIFT="${Q2_TRAIN_JSON}" \
+GRPO2_GT_PREBUILT=1 \
+USE_PRED_PHASE=0 \
+PRED_ONLY=0 \
+OUTPUT_DIR_BASE="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-2_Q2_gt_only" \
+bash examples/custom/interspeech_pipeline/scripts/04_stage3_grpo2_curriculum.sh
+
+# After training finishes, choose the adapter checkpoint you want to evaluate and merge it.
+# Example:
+# export GRPO2_GT_ONLY_ADAPTER="/datasets/work/.../GRPO-2_Q2_gt_only/gt_only_train/checkpoint-XXXX"
+#
+# BASE_MODEL_ID="${Q2_BASE_MODEL}" \
+# ADAPTER_PATH="${GRPO2_GT_ONLY_ADAPTER}" \
+# OUTPUT_DIR="${GRPO2_GT_ONLY_ADAPTER}-merged" \
+# bash examples/custom/interspeech_pipeline/scripts/05_merge_grpo2_lora.sh
+#
+# export GRPO2_GT_ONLY_CKPT="${GRPO2_GT_ONLY_ADAPTER}-merged"
+
+
+# ============================================================
+# 2) GT-only: oracle Q2 eval
+# ============================================================
+
+RUN_TAG=gt_only_eval \
+MODEL_ID="${GRPO2_GT_ONLY_CKPT}" \
+META_JSON="${Q2_VAL_JSON}" \
+OUTPUT_BASE_DIR="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval" \
+bash examples/custom/interspeech_pipeline/scripts/06_run_baseline_infer_q2_eval.sh
+
+
+# ============================================================
+# 3) Pred-only: oracle Q2 eval
+# ============================================================
+
+RUN_TAG=pred_only_eval \
+MODEL_ID="${GRPO2_PRED_ONLY_CKPT}" \
+META_JSON="${Q2_VAL_JSON}" \
+OUTPUT_BASE_DIR="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval" \
+bash examples/custom/interspeech_pipeline/scripts/06_run_baseline_infer_q2_eval.sh
+
+
+# ============================================================
+# 4) Pred->GT: oracle Q2 eval
+# ============================================================
+
+RUN_TAG=pred_gt_eval \
+MODEL_ID="${GRPO2_PRED_GT_CKPT}" \
+META_JSON="${Q2_VAL_JSON}" \
+OUTPUT_BASE_DIR="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval" \
+bash examples/custom/interspeech_pipeline/scripts/06_run_baseline_infer_q2_eval.sh
+
+
+# ============================================================
+# 5) Where to read the numbers
+# ============================================================
+# GT-only:
+# /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval/<gt_only_model_tag>/gt_only_eval/q2_eval_metrics.json
+#
+# Pred-only:
+# /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval/checkpoint-1400-merged/pred_only_eval/q2_eval_metrics.json
+#
+# Pred->GT:
+# /datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/q2_schedule_eval/checkpoint-4900-merged/pred_gt_eval/q2_eval_metrics.json
+#
+# Extract:
+#   FieldAcc = accuracy.MeanFieldAcc_macro
+#   CovAvg   = consistency.CoverageAvg
+#   BERTF1   = caption_quality_en.BERTScore_F1
