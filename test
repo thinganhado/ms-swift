@@ -16,7 +16,9 @@
 
 export Q2_TRAIN_JSON="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_train_sft_q2_swift.json"
 export Q2_VAL_JSON="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/data_GRPO2_Q2/grpo2_val.json"
-export SFT2_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q2/stage2_q2_lora_from_base_gt_train/v6-20260303-192053/checkpoint-486-merged"
+# Use the same SFT2 merged checkpoint family that appears in the historical Pred-only run args.json
+# for the cleanest apples-to-apples comparison across GT-only / Pred-only / Pred->GT.
+export SFT2_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/SFT_Q2/stage2_q2_lora_from_base_gt_train/v1-20260303-002509/checkpoint-486-merged"
 # For strict apples-to-apples comparison with GT-only, prefer raw GRPO2 checkpoint directories here
 # (not merged exports), if they still exist.
 # Replace these with the raw checkpoint paths from the original training runs if available.
@@ -30,8 +32,11 @@ export SFT2_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspee
 export GRPO2_PRED_ONLY_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-2_Q2_pred_only/v1-20260303-111455/v0-20260303-111538/checkpoint-1400-merged"
 export GRPO2_PRED_GT_CKPT="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-2_Q2_gt_from_predmerged/v6-20260303-213206/v0-20260303-213248/checkpoint-4900-merged"
 
-# This should match the exact GRPO-1-merged base used for your Q2 GRPO runs.
-# Verify this path against your existing Pred-only / Pred->GT run logs before using it.
+# This path is kept only as a historical note from the cleaner method abstraction.
+# The verified checkpoint provenance for the existing Q2 schedule runs is:
+#   Pred-only base/model = SFT2 merged checkpoint
+#   Pred->GT base/model  = Pred-only merged checkpoint
+# so the GT-only row below should also start from SFT2 merged for consistency with the saved runs.
 export Q2_BASE_MODEL="/datasets/work/dss-deepfake-audio/work/data/datasets/interspeech/final_run/GRPO-1/base_q1_merged/"
 
 
@@ -39,12 +44,12 @@ export Q2_BASE_MODEL="/datasets/work/dss-deepfake-audio/work/data/datasets/inter
 # 1) GT-only: train a GT-only GRPO2 checkpoint
 # ============================================================
 # This row does not exist yet in your provided checkpoints.
-# It starts from SFT2, skips the prediction warmup phase, trains on the Q2 train split,
+# It starts from the verified SFT2 merged checkpoint used by the historical Pred-only run,
+# skips the prediction warmup phase, trains on the Q2 train split,
 # and is then evaluated directly from the raw checkpoint on the Q2 val split.
 
 RUN_TAG=gt_only_train \
-BASE_MODEL_ID="${Q2_BASE_MODEL}" \
-Q2_SFT_INIT_CHECKPOINT="${SFT2_CKPT}" \
+BASE_MODEL_ID="${SFT2_CKPT}" \
 GRPO2_GT_JSON_IN="${Q2_TRAIN_JSON}" \
 GRPO2_GT_JSON_SWIFT="${Q2_TRAIN_JSON}" \
 GRPO2_GT_PREBUILT=1 \
